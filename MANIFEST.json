@@ -1,0 +1,217 @@
+{
+  "schemaVersion": 1,
+  "snapshotReadCompletedAt": "2026-10-08T13:20:45Z",
+  "source": "n8n MCP get_workflow_details(detailLevel=full)",
+  "repository": "https://github.com/LegalAI-Platform/N8N_LASSSSSSSST_WORKFLOWWWWWWWWWWWWWW",
+  "scope": "Existing modular legal-article draft-creation pipeline, before proposed existing-post update work",
+  "workflowCount": 7,
+  "totalNodeCount": 180,
+  "configuredSchedule": {
+    "timezone": "Africa/Cairo",
+    "dailyStart": "04:50",
+    "watchdogMinutes": 5,
+    "targetDrafts": 10,
+    "maxParallelWorkers": 2,
+    "maxCandidates": 15
+  },
+  "sourceActivation": "All seven workflows reported inactive with no active version at snapshot time.",
+  "artifacts": [
+    {
+      "file": "n8n/UPDATES_ONE_ARTICLE.json",
+      "workflowId": "IMjOAASJew6ueG10",
+      "name": "UPDATES_ONE_ARTICLE",
+      "versionId": "387f0cf3-2e38-4284-90e8-2860a72a8a00",
+      "sourceActive": false,
+      "sourceActiveVersionId": null,
+      "sourceUpdatedAt": "2026-10-08T02:16:18.399Z",
+      "nodes": 85,
+      "dependencies": [
+        "I9bW653F3A14THuT",
+        "LvPZSaHkuamQyLw2",
+        "G7WOU8sUANPK8RXg",
+        "RrchbTCuPexd3TnG",
+        "Nl6ERqJELg5KjSgD"
+      ],
+      "bytes": 231390,
+      "sha256": "ea48256d5806e5dc3f4ed2ed1aa8b643a3836bcff0fd79bba02e20fbbbbfa321"
+    },
+    {
+      "file": "n8n/UPDATES_DISPATCHER_WATCHDOG.json",
+      "workflowId": "0CPzkx20lBJjxDnP",
+      "name": "UPDATES_DISPATCHER_WATCHDOG",
+      "versionId": "66fdb353-df58-4077-9038-9a8727a5e26c",
+      "sourceActive": false,
+      "sourceActiveVersionId": null,
+      "sourceUpdatedAt": "2026-10-08T01:41:52.368Z",
+      "nodes": 16,
+      "dependencies": [
+        "IMjOAASJew6ueG10"
+      ],
+      "bytes": 25045,
+      "sha256": "1a9a2b1984ce012c22a0364193a90b7c4d544abfaecc65d99754779956c9bca9"
+    },
+    {
+      "file": "n8n/LAsST_RESEARCH_PIPELINE_V1.json",
+      "workflowId": "RrchbTCuPexd3TnG",
+      "name": "LAsST_RESEARCH_PIPELINE_V1",
+      "versionId": "e25f07c8-6a40-48f8-ad4c-1f54d70ef8b8",
+      "sourceActive": false,
+      "sourceActiveVersionId": null,
+      "sourceUpdatedAt": "2026-10-08T01:34:01.983Z",
+      "nodes": 9,
+      "dependencies": [],
+      "bytes": 10993,
+      "sha256": "9bea03528f6dc28c6570583e53765ef423f59bd69ac2fd82d4eef609cfb01830"
+    },
+    {
+      "file": "n8n/LAsST_WRITING_REVIEW_V1.json",
+      "workflowId": "Nl6ERqJELg5KjSgD",
+      "name": "LAsST_WRITING_REVIEW_V1",
+      "versionId": "fc5ded3f-e4db-4150-a03a-ae3a758f7be5",
+      "sourceActive": false,
+      "sourceActiveVersionId": null,
+      "sourceUpdatedAt": "2026-10-08T01:34:42.574Z",
+      "nodes": 14,
+      "dependencies": [],
+      "bytes": 123995,
+      "sha256": "525a23945fd3791e28207b858a8cbb39df036b9e34d9a46de5c6486042638a67"
+    },
+    {
+      "file": "n8n/LAsST_IMAGE_PIPELINE_V1.json",
+      "workflowId": "I9bW653F3A14THuT",
+      "name": "LAsST_IMAGE_PIPELINE_V1",
+      "versionId": "187ebea8-9691-44e2-b3e5-c88d89e9474a",
+      "sourceActive": false,
+      "sourceActiveVersionId": null,
+      "sourceUpdatedAt": "2026-10-08T02:11:18.873Z",
+      "nodes": 24,
+      "dependencies": [],
+      "bytes": 40356,
+      "sha256": "3a97afa4da7ec284f55b85627ae81eea0d467904966c29de1899c57fb4ebbc25"
+    },
+    {
+      "file": "n8n/LAsST_TELEGRAM_REVIEW_V1.json",
+      "workflowId": "LvPZSaHkuamQyLw2",
+      "name": "LAsST_TELEGRAM_REVIEW_V1",
+      "versionId": "e67085f9-3f3e-43ec-804e-29f10f613126",
+      "sourceActive": false,
+      "sourceActiveVersionId": null,
+      "sourceUpdatedAt": "2026-10-08T01:44:31.400Z",
+      "nodes": 10,
+      "dependencies": [],
+      "bytes": 13683,
+      "sha256": "7efa4fb7b7622242ccecbe84e4cdc70604833e3e1ec366dd89758543dee03029"
+    },
+    {
+      "file": "n8n/LAsST_WORDPRESS_DRAFT_V1.json",
+      "workflowId": "G7WOU8sUANPK8RXg",
+      "name": "LAsST_WORDPRESS_DRAFT_V1",
+      "versionId": "f8a8d583-539f-4ea0-9072-a3a9b150cca2",
+      "sourceActive": false,
+      "sourceActiveVersionId": null,
+      "sourceUpdatedAt": "2026-10-08T01:44:02.500Z",
+      "nodes": 22,
+      "dependencies": [],
+      "bytes": 37308,
+      "sha256": "ac4b385353bd07b8419cd2aab384d8800793c3b31e88df1519a302c8fc3634c6"
+    }
+  ],
+  "supportingFiles": [
+    {
+      "file": "README.md",
+      "bytes": 7272,
+      "sha256": "b14bb1bd2140c1e15131243927be3360bad9c4ca650e0760225c48854b55f16a"
+    },
+    {
+      "file": "docs/MAINTENANCE.md",
+      "bytes": 6072,
+      "sha256": "23722f6e893cf6c38e3f0780a34a28c0964b04b8df7f4ec3ccca18e6a1fb35ba"
+    },
+    {
+      "file": "docs/SHEET_SCHEMA.json",
+      "bytes": 1442,
+      "sha256": "2e027d29f8f13f41cd4fd1af47c8eb1cb81e9eede12abcc47f4bfc0fad291ef8"
+    },
+    {
+      "file": ".gitignore",
+      "bytes": 184,
+      "sha256": "b3f09ec192697e962abf11ace78ebf0f260bf2dec5bc52c4d3adf915f3565c5c"
+    },
+    {
+      "file": ".gitattributes",
+      "bytes": 86,
+      "sha256": "f2a89d66a784cbb929eebf16a24c2fc257d6e9f60ebf9ae51c8fe6df060f2e7c"
+    }
+  ],
+  "credentialReferences": [
+    {
+      "type": "googleSheetsOAuth2Api",
+      "id": "VuRl2ldGVeXPpeVF",
+      "name": "Google Sheets account 2"
+    },
+    {
+      "type": "openAiApi",
+      "id": "gZEm7KnGVjuhsO4J",
+      "name": "OpenAI account"
+    },
+    {
+      "type": "httpHeaderAuth",
+      "id": "3pfoqZRpN6gKYS0D",
+      "name": "Tavily Search API"
+    },
+    {
+      "type": "telegramApi",
+      "id": "wj4rFLhl92z4ctIR",
+      "name": "Legal Articles Telegram Bot"
+    },
+    {
+      "type": "httpBasicAuth",
+      "id": "JYEoFNynceC4hZhp",
+      "name": "Saad WordPress Application Password"
+    },
+    {
+      "type": "httpHeaderAuth",
+      "id": "hfVvkRHegYr8IBiS",
+      "name": "Saad WordPress Custom API"
+    },
+    {
+      "type": "groqApi",
+      "id": "V7mUZ8aYc8o0Qbbs",
+      "name": "Groq account"
+    }
+  ],
+  "exportedFields": [
+    "name",
+    "nodes",
+    "connections",
+    "settings",
+    "active",
+    "id",
+    "versionId",
+    "nodeGroups",
+    "tags"
+  ],
+  "excluded": [
+    "Credential secret values",
+    "Pinned or saved execution data",
+    "Static runtime data",
+    "User/sharing and instance metadata",
+    "Google Sheet row data and named-range locks",
+    "Generated images and article payloads",
+    "Protected legacy workflow eIio1X70hld4bHXy",
+    "Proposed existing-post update implementation"
+  ],
+  "validation": {
+    "jsonParsed": true,
+    "sourceGraphParity": true,
+    "connectionTargetsPresent": true,
+    "subworkflowTargetsPresent": true,
+    "callerIdsPresent": true,
+    "exactSheetSchemaMatchesDispatcher": true,
+    "recognizedSecretPatternMatches": 0,
+    "credentialObjectsContainOnlyReferences": true,
+    "liveExecutionStarted": false
+  },
+  "restoration": "Rebind credentials, workflow IDs, caller policies and instance-specific resources before activation. This is a configuration snapshot, not a complete runtime-state backup.",
+  "checksumAlgorithm": "SHA-256 over UTF-8 file bytes with LF line endings; MANIFEST.json excludes its own checksum."
+}

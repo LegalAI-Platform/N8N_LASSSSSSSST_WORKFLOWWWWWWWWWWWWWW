@@ -1,0 +1,918 @@
+{
+  "name": "LAsST_IMAGE_PIPELINE_V1",
+  "nodes": [
+    {
+      "id": "bfecfe05-01c2-46c1-bd95-2e5d6d6bce17",
+      "name": "Image Pipeline Input",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "inputSource": "passthrough",
+        "returnOutput": "allRuns"
+      }
+    },
+    {
+      "id": "456c5812-e36e-49c5-8f89-fa47e4206d84",
+      "name": "Normalize Image Pipeline Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        280,
+        0
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "\nfunction shapeArabic(text){\n const rows=[[0x621,0xfe80,1],[0x622,0xfe81,2],[0x623,0xfe83,2],[0x624,0xfe85,2],[0x625,0xfe87,2],[0x626,0xfe89,4],[0x627,0xfe8d,2],[0x628,0xfe8f,4],[0x629,0xfe93,2],[0x62a,0xfe95,4],[0x62b,0xfe99,4],[0x62c,0xfe9d,4],[0x62d,0xfea1,4],[0x62e,0xfea5,4],[0x62f,0xfea9,2],[0x630,0xfeab,2],[0x631,0xfead,2],[0x632,0xfeaf,2],[0x633,0xfeb1,4],[0x634,0xfeb5,4],[0x635,0xfeb9,4],[0x636,0xfebd,4],[0x637,0xfec1,4],[0x638,0xfec5,4],[0x639,0xfec9,4],[0x63a,0xfecd,4],[0x641,0xfed1,4],[0x642,0xfed5,4],[0x643,0xfed9,4],[0x644,0xfedd,4],[0x645,0xfee1,4],[0x646,0xfee5,4],[0x647,0xfee9,4],[0x648,0xfeed,2],[0x649,0xfeef,2],[0x64a,0xfef1,4]];\n const map=new Map(rows.map(([c,start,n])=>[String.fromCharCode(c),{start,n}]));\n return String(text).replace(/[\\u064B-\\u065F\\u0670\\u0640]/g,'').split('\\n').map(line=>{\n  const chars=Array.from(line),shaped=chars.map((ch,i)=>{\n   const cur=map.get(ch);if(!cur)return ch;\n   const prev=map.get(chars[i-1]),next=map.get(chars[i+1]);\n   const p=!!prev&&prev.n===4&&cur.n>=2,n=cur.n===4&&!!next&&next.n>=2;\n   return String.fromCharCode(cur.start+(p&&n?3:n?2:p?1:0));\n  });\n  return shaped.reverse().join('').replace(/[A-Za-z0-9٠-٩][A-Za-z0-9٠-٩ .:/_-]*/g,x=>Array.from(x).reverse().join(''));\n }).join('\\n');\n}\nfunction wrapTitle(text){\n const words=String(text).replace(/\\s+/g,' ').trim().split(' '),lines=[];let current='';\n for(const word of words){if(current&&(current+' '+word).length>32){lines.push(current);current=word;}else current+=(current?' ':'')+word;}\n if(current)lines.push(current);\n return lines.slice(0,3).join('\\n');\n}\n\n\nfunction parseImagePlan(raw) {\n if(raw&&typeof raw==='object')return {plan:raw,repaired:false};\n const text=String(raw??'').trim().replace(/^\\x60\\x60\\x60(?:json)?\\s*/i,'').replace(/\\s*\\x60\\x60\\x60$/,'');\n try{return {plan:JSON.parse(text),repaired:false};}catch{}\n let repaired='',quoted=false,escaped=false,previous='';\n for(let i=0;i<text.length;i++){\n  const c=text[i];\n  if(quoted){repaired+=c;if(escaped)escaped=false;else if(c==='\\\\')escaped=true;else if(c==='\"'){quoted=false;previous='\"';}continue;}\n  if(c==='\"'){quoted=true;repaired+=c;continue;}\n  if(c==='{'&&previous==='{')continue;\n  if(c===','){let next=i+1;while(/\\s/.test(text[next]||'')&&next<text.length)next++;if(text[next]==='}'||text[next]===']')continue;}\n  repaired+=c;if(!/\\s/.test(c))previous=c;\n }\n try{return {plan:JSON.parse(repaired),repaired:true};}catch(e){throw new Error('Image plan configuration: invalid JSON after safe formatting repair: '+e.message);}\n}\n\nconst input=$json||{},s=JSON.parse(JSON.stringify(input.state||input.review_state||input));\nif(!s.topic?.topic_id||!s.article?.content_html||!s.article?.title||!s.run_id)throw new Error('Image pipeline configuration: missing article/topic/worker state');\nif(s.reuse_existing_images===true)return [{json:{state:s,reuse_existing:true},pairedItem:{item:0}}];\nconst roles=['featured','inline_1','inline_2','inline_3'];\nif(input.generated_images!==undefined){\n const images=input.generated_images;\n if(!Array.isArray(images)||images.length!==4||new Set(images.map(x=>x.image?.role)).size!==4)throw new Error('Image pipeline configuration: recovery requires four unique generated images');\n return roles.map((role,index)=>{\n  const r=images.find(x=>x.image?.role===role);\n  if(!r||r.provider!=='openai'||r.image_status!=='complete'||typeof r.b64_json!=='string'||r.b64_json.length<100||r.image.index!==index)throw new Error('Image pipeline configuration: invalid saved generated image '+role);\n  return {json:{...r,state:s,recovered_generated:true},pairedItem:{item:0}};\n });\n}\nconst parsed=parseImagePlan(input.image_plan??input.output),p=parsed.plan;\nif(!p||!Array.isArray(p.images)||p.images.length!==4||new Set(p.images.map(x=>x.role)).size!==4||p.images.some(x=>!roles.includes(x.role)))throw new Error('Image plan configuration: expected exactly four unique image roles');\ns.image_plan_parse_status=parsed.repaired?'formatting_repaired':'valid';\nconst fileBase=String(s.topic.topic_id).replace(/[^a-zA-Z0-9_-]/g,'-').slice(0,80);\nreturn roles.map((role,index)=>{\n const im=p.images.find(x=>x.role===role);\n if(!im||typeof im.prompt!=='string'||im.prompt.length<20||im.prompt.length>1800||typeof im.alt_text!=='string'||!im.alt_text.trim())throw new Error('Image plan configuration: invalid prompt/alt text for '+role);\n const title_text=role==='featured'?s.article.title:im.alt_text,title_shaped=shapeArabic(wrapTitle(title_text));\n let altText=im.alt_text.trim();\n if((role==='featured'||role==='inline_1')&&!altText.includes(s.article.keyword))altText=s.article.keyword+' — '+altText;\n const image={role,index,title_text,title_shaped,prompt:im.prompt+'; serious editorial photography; navy and subtle gold palette; center composition for panoramic crop; no readable text, no logos, no watermark.',alt_text:altText.slice(0,240),file_name:fileBase+'-'+role+'.webp'};\n return {json:{state:s,image},pairedItem:{item:0}};\n});"
+      },
+      "onError": "stopWorkflow"
+    },
+    {
+      "id": "e3a966a6-160a-49cd-aa95-ab3b98f12c6e",
+      "name": "Decode Generated Image",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        860,
+        -220
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const out=[];for(let i=0;i<$input.all().length;i++){const r=$input.all()[i].json;if(r.image_status!=='complete'||!r.image||r.provider!=='openai')throw new Error('OpenAI image configuration: incomplete generated image');if(!r.state?.article||!r.state?.topic?.topic_id)throw new Error('Image pipeline configuration: generated image is missing article state');const raw=r.b64_json,b=Buffer.from(raw,'base64'),jpeg=b[0]===255&&b[1]===216,png=b.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10]));if(!jpeg&&!png)throw new Error('OpenAI image configuration: unsupported image format');const image=await this.helpers.prepareBinaryData(b,'generated.'+(jpeg?'jpg':'png'),jpeg?'image/jpeg':'image/png');out.push({json:{state:r.state,image:r.image,provider:'openai',model:r.model,request_id:r.request_id},binary:{image},pairedItem:{item:i}});}return out;"
+      },
+      "onError": "stopWorkflow"
+    },
+    {
+      "id": "652b9e37-4724-4890-8a7c-6913af87bd75",
+      "name": "Download Site Logo",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1080,
+        -220
+      ],
+      "parameters": {
+        "url": "https://saadfathysaad.net/storage/2026/06/logo-saad-2048x886.png",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file",
+              "outputPropertyName": "brand_logo"
+            }
+          },
+          "timeout": 30000
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "onError": "stopWorkflow"
+    },
+    {
+      "id": "08b2a401-bb26-4610-81b6-c60d7060f997",
+      "name": "Resize Site Logo",
+      "type": "n8n-nodes-base.editImage",
+      "typeVersion": 1.1,
+      "position": [
+        1300,
+        -220
+      ],
+      "parameters": {
+        "operation": "resize",
+        "dataPropertyName": "brand_logo",
+        "width": 280,
+        "height": 121,
+        "resizeOption": "ignoreAspectRatio",
+        "options": {
+          "fileName": "saad-brand-logo.png",
+          "format": "png"
+        }
+      },
+      "onError": "stopWorkflow"
+    },
+    {
+      "id": "5f38e387-eb37-4e29-80fe-030e9a6a02ff",
+      "name": "Prepare Branded Image",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1520,
+        -220
+      ],
+      "parameters": {
+        "jsCode": "\nfunction crc32(buf){let c=0xffffffff;for(const byte of buf){c^=byte;for(let k=0;k<8;k++)c=(c>>>1)^((c&1)?0xedb88320:0);}return (c^0xffffffff)>>>0;}\nfunction pngChunk(type,data){const t=Buffer.from(type),out=Buffer.alloc(data.length+12);out.writeUInt32BE(data.length,0);t.copy(out,4);data.copy(out,8);out.writeUInt32BE(crc32(Buffer.concat([t,data])),data.length+8);return out;}\nconst width=1200,height=630,stride=width*4+1,raw=Buffer.alloc(stride*height);\nfor(let y=0;y<height;y++){const alpha=Math.round(25+218*Math.pow(y/(height-1),1.3));for(let x=0;x<width;x++){const k=y*stride+1+x*4;raw[k]=12;raw[k+1]=30;raw[k+2]=51;raw[k+3]=alpha;}}\nconst deflate=[Buffer.from([0x78,0x01])];for(let start=0;start<raw.length;start+=65535){const len=Math.min(65535,raw.length-start),h=Buffer.alloc(5);h[0]=start+len===raw.length?1:0;h.writeUInt16LE(len,1);h.writeUInt16LE((~len)&65535,3);deflate.push(h,raw.subarray(start,start+len));}\nlet a=1,b=0;for(const byte of raw){a=(a+byte)%65521;b=(b+a)%65521;}const adler=Buffer.alloc(4);adler.writeUInt32BE(((b<<16)|a)>>>0,0);deflate.push(adler);\nconst ihdr=Buffer.alloc(13);ihdr.writeUInt32BE(width,0);ihdr.writeUInt32BE(height,4);ihdr[8]=8;ihdr[9]=6;\nconst png=Buffer.concat([Buffer.from([137,80,78,71,13,10,26,10]),pngChunk('IHDR',ihdr),pngChunk('IDAT',Buffer.concat(deflate)),pngChunk('IEND',Buffer.alloc(0))]);\nconst brand_gradient=await this.helpers.prepareBinaryData(png,'navy-gradient.png','image/png');\nreturn $input.all().map((item,i)=>{const original=$('Decode Generated Image').itemMatching(i);return {json:original.json,binary:{image:original.binary.image,brand_logo:item.binary.brand_logo,brand_gradient},pairedItem:{item:i}};});"
+      },
+      "onError": "stopWorkflow"
+    },
+    {
+      "id": "d60b7839-c38d-48a7-aa46-c59da76f3cdd",
+      "name": "Create Exact WebP",
+      "type": "n8n-nodes-base.editImage",
+      "typeVersion": 1.1,
+      "position": [
+        1740,
+        -220
+      ],
+      "parameters": {
+        "operation": "multiStep",
+        "dataPropertyName": "image",
+        "operations": {
+          "operations": [
+            {
+              "operation": "resize",
+              "width": 1200,
+              "height": 1200,
+              "resizeOption": "ignoreAspectRatio"
+            },
+            {
+              "operation": "crop",
+              "width": 1200,
+              "height": 630,
+              "positionY": 285
+            },
+            {
+              "operation": "composite",
+              "dataPropertyNameComposite": "brand_gradient"
+            },
+            {
+              "operation": "draw",
+              "color": "#c4a158",
+              "startPositionX": 440,
+              "startPositionY": 456,
+              "endPositionX": 760,
+              "endPositionY": 458
+            },
+            {
+              "operation": "composite",
+              "dataPropertyNameComposite": "brand_logo",
+              "positionX": 460,
+              "positionY": 480
+            }
+          ]
+        },
+        "options": {
+          "fileName": "={{ $json.image.file_name }}",
+          "format": "webp"
+        }
+      },
+      "onError": "stopWorkflow"
+    },
+    {
+      "id": "62e42cb3-11e5-4060-9289-1ccfabcbad5c",
+      "name": "Render Arabic Image Title",
+      "type": "n8n-nodes-base.editImage",
+      "typeVersion": 1.1,
+      "position": [
+        1960,
+        -220
+      ],
+      "parameters": {
+        "operation": "text",
+        "dataPropertyName": "image",
+        "text": "={{ $json.image.title_shaped }}",
+        "fontSize": 44,
+        "fontColor": "#ffffff",
+        "positionX": 0,
+        "positionY": 20,
+        "lineLength": 100,
+        "options": {
+          "fileName": "={{ $json.image.file_name }}",
+          "font": "/usr/share/fonts/truetype/msttcorefonts/Arial_Bold.ttf",
+          "format": "webp"
+        }
+      },
+      "onError": "stopWorkflow"
+    },
+    {
+      "id": "4a6b8d7f-a919-4b52-8746-13a3f7dc12e4",
+      "name": "Validate and Package",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2180,
+        -220
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const items=$input.all();if(items.length!==4)throw new Error('Expected one featured and three inline images');const s=JSON.parse(JSON.stringify(items[0].json.state||{}));if(!s.article||!s.topic)throw new Error('Image pipeline input contract is missing article/topic state');for(const item of items){const state=item.json.state;if(!state||state.topic?.topic_id!==s.topic.topic_id||String(state.run_id)!==String(s.run_id)||Number(state.revision)!==Number(s.revision))throw new Error('Image pipeline configuration: mixed article/image ownership');}s.images=[];for(let i=0;i<items.length;i++){const b=await this.helpers.getBinaryDataBuffer(i,'image');if(b.toString('ascii',0,4)!=='RIFF'||b.toString('ascii',8,12)!=='WEBP')throw new Error('Image is not WebP');let width=0,height=0;for(let off=12;off+8<b.length;){const type=b.toString('ascii',off,off+4),len=b.readUInt32LE(off+4),k=off+8;if(type==='VP8X'){width=1+b.readUIntLE(k+4,3);height=1+b.readUIntLE(k+7,3);break;}if(type==='VP8 '){width=b.readUInt16LE(k+6)&16383;height=b.readUInt16LE(k+8)&16383;break;}if(type==='VP8L'){const v=b.readUInt32LE(k+1);width=1+(v&16383);height=1+((v>>>14)&16383);break;}off=k+len+(len%2);}if(width!==1200||height!==630)throw new Error('Expected 1200x630; got '+width+'x'+height);const im=items[i].json.image;if(!im||!['featured','inline_1','inline_2','inline_3'].includes(im.role))throw new Error('Missing generated image metadata');s.images.push({...im,width,height,bytes:b.length,base64:b.toString('base64')});}if(new Set(s.images.map(x=>x.role)).size!==4)throw new Error('Duplicate image roles');s.images.sort((a,b)=>a.index-b.index);s.image_reuse_applied=items.every(x=>x.json.reused_image===true);s.image={...s.images[0]};delete s.image.base64;s.image_base64=s.images[0].base64;s.review_token=s.run_id+':'+s.topic.topic_id+':v'+s.revision;const esc=v=>String(v??'').replace(/[&<>\"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',\"'\":'&#39;'}[c]));let body=s.article.content_html;for(const im of s.images.slice(1))body=body.replace('<!-- ARTICLE_IMAGE_'+im.index+' -->','<figure><img width=\"1200\" height=\"630\" alt=\"'+esc(im.alt_text)+'\" src=\"data:image/webp;base64,'+im.base64+'\"></figure>');if((body.match(/<img\\b/g)||[]).length!==3)throw new Error('Expected exactly three body image slots');const report={seo_title:s.article.seo_title,meta_description:s.article.meta_description,keyword:s.article.keyword,rankmath_target:95,rankmath_score:null,rankmath_status:'Not yet measured in WordPress',word_count:s.word_count,human_edit:s.human_edit_result||null,images_reused:s.image_reuse_applied,review:s.review,warning:s.review_warning_text,images:s.images.map(({base64,...im})=>im)};const html='<!doctype html><html lang=\"ar\" dir=\"rtl\"><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>'+esc(s.article.title)+'</title><style>body{max-width:900px;margin:40px auto;padding:20px;font-family:Arial;line-height:1.9}img{max-width:100%;height:auto}table{border-collapse:collapse}td,th{border:1px solid #aaa;padding:8px}pre{white-space:pre-wrap}</style><h1>'+esc(s.article.title)+'</h1><img alt=\"'+esc(s.image.alt_text)+'\" src=\"data:image/webp;base64,'+s.image_base64+'\">'+body+'<hr><h2>للمحرر فقط — النسخة '+esc(s.review_token)+'</h2><pre>'+esc(JSON.stringify(report,null,2))+'</pre></html>';const fileBase=String(s.topic.topic_id).replace(/[^a-zA-Z0-9_-]/g,'-');const article=await this.helpers.prepareBinaryData(Buffer.from(html,'utf8'),fileBase+'-v'+s.revision+'.html','text/html');return [{json:s,binary:{article,image:items[0].binary.image},pairedItem:{item:0}}];"
+      },
+      "onError": "stopWorkflow"
+    },
+    {
+      "id": "3c0f7b6a-f42c-4937-a20e-9b4dd00667ec",
+      "name": "Prepare OpenAI Image",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        860,
+        180
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const state=$json.state||{};const image=$json.image;if(!image||!['featured','inline_1','inline_2','inline_3'].includes(image.role)||typeof image.prompt!=='string'||image.prompt.length<20)throw new Error('OpenAI image configuration: missing image prompt or role');return [{json:{state,image,provider:'openai',model:'gpt-image-2.5-flare',attempt:1,slot_checks:0,image_started_at:Date.now()},pairedItem:{item:0}}];"
+      },
+      "onError": "stopWorkflow"
+    },
+    {
+      "id": "02ab61ad-ad83-4743-b5a4-7e48c217c3cd",
+      "name": "Plan OpenAI Image Slot",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1080,
+        180
+      ],
+      "parameters": {
+        "jsCode": "const x={...$json},now=Date.now();\nif(now-Number(x.image_started_at)>20*60*1000)throw new Error('OpenAI image quota: image retry window exceeded; manual review required');\nif(Number(x.slot_checks||0)>=60)throw new Error('OpenAI image quota: global image queue wait exceeded');\nconst slot=Math.floor(now/30000),range={sheetId:8707001,startRowIndex:0,endRowIndex:1,startColumnIndex:0,endColumnIndex:1};\nconst requests=[slot,slot+1].map(k=>({addNamedRange:{namedRange:{namedRangeId:'updates_oai_slot_'+k,name:'UPDATES_OAI_SLOT_'+k,range}}}));\nreturn [{json:{...x,slot_checks:Number(x.slot_checks||0)+1,slot,slot_planned_at:now,requests},pairedItem:{item:0}}];"
+      },
+      "onError": "stopWorkflow"
+    },
+    {
+      "id": "cce25a44-6a24-42d1-b5aa-de6da9343755",
+      "name": "Reserve OpenAI Image Slot",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1300,
+        180
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://sheets.googleapis.com/v4/spreadsheets/1F1ePNxEyhGGAaXcid_qLuOn8-GRMhC16MKFWXWc0rx0:batchUpdate",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleSheetsOAuth2Api",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({requests:$json.requests}) }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          },
+          "timeout": 10000
+        }
+      },
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "VuRl2ldGVeXPpeVF",
+          "name": "Google Sheets account 2"
+        }
+      }
+    },
+    {
+      "id": "1848fc91-41e3-4066-90d6-dc7dc6fdeda5",
+      "name": "Check OpenAI Image Slot",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1520,
+        180
+      ],
+      "parameters": {
+        "jsCode": "const x={...$('Plan OpenAI Image Slot').item.json},r=$json,status=Number(r.statusCode||0),body=r.body||{},msg=String(body.error?.message||r.error?.message||r.error||'');\ndelete x.requests;\nif(status===200&&Date.now()-x.slot_planned_at<10000)return [{json:{...x,slot_ready:true},pairedItem:{item:0}}];\nconst collision=status===400&&/already exists|duplicate/i.test(msg);\nif(collision||status===200||status===429||status>=500||!status){\n const delay=Math.max(2,Math.ceil(((x.slot+1)*30000-Date.now())/1000))+2+Math.floor(Math.random()*4);\n return [{json:{...x,slot_ready:false,wait_seconds:delay},pairedItem:{item:0}}];\n}\nthrow new Error('OpenAI image configuration: global slot reservation failed HTTP '+status+' '+msg.slice(0,300));"
+      },
+      "onError": "stopWorkflow"
+    },
+    {
+      "id": "b8f9ac89-d19d-46b2-966a-8861b95578dc",
+      "name": "OpenAI Image Slot Ready",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1740,
+        180
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.slot_ready === true }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "6fbe9f61-ae41-48fd-a141-6a485026869d",
+      "name": "Generate Featured Image",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1960,
+        120
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/images/generations",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "openAiApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Client-Request-Id",
+              "value": "={{ 'updates-image-'+$execution.id+'-'+$json.image.role+'-'+$json.image_started_at+'-'+$json.attempt }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({model:$json.model,prompt:$json.image.prompt,n:1,size:'1024x1024',quality:'medium',output_format:'png'}) }}",
+        "options": {
+          "redirect": {
+            "redirect": {
+              "followRedirects": false
+            }
+          },
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          },
+          "timeout": 180000
+        }
+      },
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "openAiApi": {
+          "id": "gZEm7KnGVjuhsO4J",
+          "name": "OpenAI account"
+        }
+      }
+    },
+    {
+      "id": "18779f4e-e152-4ada-a333-6b0828193421",
+      "name": "Read OpenAI Image Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2180,
+        120
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const x={...$('OpenAI Image Slot Ready').item.json},r=$json,body=r.body??r,status=Number(r.statusCode||r.error?.statusCode||r.error?.httpCode||0);\nif(!x.state?.article||!x.state?.topic?.topic_id)throw new Error('Image pipeline configuration: OpenAI response lost article state');\nconst headers=r.headers||{},error=body.error??r.error??{},code=String(error.code||error.type||''),msg=String(error.message||r.message||'Unknown response');\nconst requestId=String(headers['x-request-id']||headers['X-Request-Id']||'');\nconst finish=(kind,reason,action)=>{throw new Error('['+kind+'] OpenAI image: '+reason+' '+action+' (code='+String(code||status||'transport_error')+', request_id='+requestId+')');};\nif(status>=200&&status<300){\n if(!Array.isArray(body.data)||body.data.length!==1||typeof body.data[0]?.b64_json!=='string')return finish('configuration','OpenAI رجّع نتيجة صورة ناقصة أو غير صالحة.','توقف المقال؛ يلزم مراجعة نتيجة الطلب قبل تكراره.');\n const b64=body.data[0].b64_json;\n if(b64.length<100||b64.length>30000000||!/^[A-Za-z0-9+/]+={0,2}$/.test(b64))return finish('configuration','OpenAI رجّع بيانات صورة غير صالحة.','توقف المقال للمراجعة.');\n return [{json:{state:x.state,image:x.image,provider:'openai',model:x.model,image_status:'complete',b64_json:b64,request_id:requestId,attempt:x.attempt,usage:body.usage||null},pairedItem:{item:0}}];\n}\nif(/insufficient_quota|credit_balance_exhausted|billing|spend_limit|usage_limit|quota.*exceeded|exceeded.*quota/i.test(code+' '+msg))return finish('quota','رصيد OpenAI أو حد الإنفاق المتاح لا يكفي لتوليد الصور.','راجع الرصيد وحدود الاستخدام في OpenAI. الدفعة ستتوقف ولن تتكرر الطلبات تلقائيًا.');\nif(status===401||status===403||/invalid_api_key|permission|verification|verify.*organization/i.test(code+' '+msg))return finish('auth','OpenAI رفض صلاحية المفتاح أو يتطلب تفعيل صلاحية توليد الصور أو توثيق الحساب.','راجع إعدادات OpenAI account في n8n وصلاحيات المشروع. لا توجد إعادة محاولة تلقائية.');\nif(/content_policy|moderation|safety|image_generation_user_error/i.test(code+' '+msg))return finish('article','OpenAI رفض وصف الصورة وفق سياسة المحتوى.','راجع وصف هذه الصورة. لم يتم تعديل الوصف للتحايل على الرفض.');\nconst transient=status===429||[500,502,503,504].includes(status);\nif(transient){\n const attempt=Number(x.attempt||1),base=[60,180,600][attempt-1],retryAfter=headers['retry-after']||headers['Retry-After'];\n let serverDelay=0;\n if(retryAfter)serverDelay=/^\\d+(\\.\\d+)?$/.test(String(retryAfter))?Number(retryAfter):Math.max(0,(Date.parse(retryAfter)-Date.now())/1000);\n for(const k of ['x-ratelimit-reset-requests','x-ratelimit-reset-tokens']){\n  const v=String(headers[k]||'');let seconds=0;\n  for(const m of v.matchAll(/(\\d+(?:\\.\\d+)?)(ms|s|m|h)/g))seconds+=Number(m[1])*({ms:0.001,s:1,m:60,h:3600}[m[2]]);\n  serverDelay=Math.max(serverDelay,seconds);\n }\n if(!Number.isFinite(serverDelay))serverDelay=0;\n if(attempt>=4)return finish('quota','استمر ضغط الطلبات أو عطل OpenAI بعد 3 محاولات إضافية للصورة.','توقف المقال والدفعة للمراجعة حتى لا تتكرر التكلفة على مقالات بديلة.');\n const wait=Math.ceil(Math.max(base,serverDelay))+Math.floor(Math.random()*11);\n if(Date.now()+wait*1000-Number(x.image_started_at)>20*60*1000)return finish('quota','OpenAI طلب انتظارًا أطول من مهلة إعادة المحاولة المسموحة للصورة.','أُوقف المقال؛ أعد المحاولة بعد انتهاء مهلة الخدمة.');\n return [{json:{...x,image_status:'retry',attempt:attempt+1,wait_seconds:wait,last_http_status:status,request_id:requestId},pairedItem:{item:0}}];\n}\nif(!status||status===408)return finish('ambiguous_write','انتهت مهلة الاتصال بـOpenAI أو انقطع الاتصال قبل تأكيد نتيجة الصورة.','أُوقف الطلب للمراجعة؛ لن يُرسل طلب مدفوع آخر تلقائيًا لأن نتيجة الطلب السابق غير مؤكدة.');\nreturn finish('configuration','تعذّر طلب الصورة من OpenAI (HTTP '+status+'، '+code+'): '+msg.slice(0,350),'راجع إعدادات الموديل والطلب. أُوقفت الدفعة دون إعادة محاولات غير مفيدة.');"
+      },
+      "onError": "stopWorkflow"
+    },
+    {
+      "id": "e7d4a768-55d5-4b2a-8901-6e332fc031b0",
+      "name": "OpenAI Image Complete",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        2400,
+        120
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.image_status === 'complete' }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "d5ce279b-3e02-4d8a-a9de-0d4fdd8cdcfe",
+      "name": "Images One at a Time",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        9008,
+        7296
+      ],
+      "parameters": {
+        "options": {
+          "reset": "={{ $json.image_status !== 'complete' }}"
+        }
+      }
+    },
+    {
+      "id": "8674b10b-f5c8-450f-837f-203d09a69081",
+      "name": "OpenAI Image Retry",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        2620,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.image_status === 'retry' }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "b83beb83-04be-4638-ac26-cce5be2f650a",
+      "name": "Wait for OpenAI Image Retry",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        2840,
+        300
+      ],
+      "parameters": {
+        "amount": "={{ $json.wait_seconds }}"
+      },
+      "webhookId": "bf297770-2641-4439-acef-51abc25cdabb"
+    },
+    {
+      "id": "32a116f2-11d4-45bf-95e5-b6ef2aaa57ee",
+      "name": "Wait for OpenAI Image Slot",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1960,
+        360
+      ],
+      "parameters": {
+        "amount": "={{ $json.wait_seconds }}"
+      },
+      "webhookId": "e9fde0be-80de-4fc7-95b2-79195f1dc896"
+    },
+    {
+      "id": "b73dd6d1-30e1-427b-b822-45cbdf994ad0",
+      "name": "Has Existing Images?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        520,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "reuse-approved-image-package",
+              "leftValue": "={{ $json.reuse_existing === true }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "d1226d34-0562-4f61-9afe-932bf0e23ed8",
+      "name": "Restore Existing Images",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        760,
+        260
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const s=$json.state;if(!s||s.reuse_existing_images!==true||!Array.isArray(s.images)||s.images.length!==4)throw new Error('Previous image package is required for text-only revision');const roles=['featured','inline_1','inline_2','inline_3'],out=[];for(let index=0;index<roles.length;index++){const candidates=s.images.filter(x=>x.role===roles[index]);if(candidates.length!==1)throw new Error('Missing or duplicate image role');const im=candidates[0],raw=String(im.base64||'');if(im.index!==index||!raw||!/^[A-Za-z0-9+/]+={0,2}$/.test(raw))throw new Error('Invalid retained image');const b=Buffer.from(raw,'base64');if(b.length!==im.bytes||b.toString('ascii',0,4)!=='RIFF'||b.toString('ascii',8,12)!=='WEBP')throw new Error('Retained image bytes are invalid');const {base64,...image}=im;const binary=await this.helpers.prepareBinaryData(b,im.file_name,'image/webp');out.push({json:{state:s,image,reused_image:true},binary:{image:binary},pairedItem:{item:0}});}return out;"
+      }
+    },
+    {
+      "id": "2152f87d-a716-4db4-a8cd-3eea5a1bf4e1",
+      "name": "Use Saved Generation?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        610,
+        140
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.recovered_generated === true }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    }
+  ],
+  "connections": {
+    "Image Pipeline Input": {
+      "main": [
+        [
+          {
+            "node": "Normalize Image Pipeline Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Decode Generated Image": {
+      "main": [
+        [
+          {
+            "node": "Download Site Logo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download Site Logo": {
+      "main": [
+        [
+          {
+            "node": "Resize Site Logo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Resize Site Logo": {
+      "main": [
+        [
+          {
+            "node": "Prepare Branded Image",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Branded Image": {
+      "main": [
+        [
+          {
+            "node": "Create Exact WebP",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Exact WebP": {
+      "main": [
+        [
+          {
+            "node": "Render Arabic Image Title",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Render Arabic Image Title": {
+      "main": [
+        [
+          {
+            "node": "Validate and Package",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare OpenAI Image": {
+      "main": [
+        [
+          {
+            "node": "Plan OpenAI Image Slot",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Plan OpenAI Image Slot": {
+      "main": [
+        [
+          {
+            "node": "Reserve OpenAI Image Slot",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reserve OpenAI Image Slot": {
+      "main": [
+        [
+          {
+            "node": "Check OpenAI Image Slot",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check OpenAI Image Slot": {
+      "main": [
+        [
+          {
+            "node": "OpenAI Image Slot Ready",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Image Slot Ready": {
+      "main": [
+        [
+          {
+            "node": "Generate Featured Image",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Wait for OpenAI Image Slot",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Featured Image": {
+      "main": [
+        [
+          {
+            "node": "Read OpenAI Image Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read OpenAI Image Response": {
+      "main": [
+        [
+          {
+            "node": "OpenAI Image Complete",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Image Complete": {
+      "main": [
+        [
+          {
+            "node": "Images One at a Time",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "OpenAI Image Retry",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Images One at a Time": {
+      "main": [
+        [
+          {
+            "node": "Decode Generated Image",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare OpenAI Image",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Image Retry": {
+      "main": [
+        [
+          {
+            "node": "Wait for OpenAI Image Retry",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Images One at a Time",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait for OpenAI Image Retry": {
+      "main": [
+        [
+          {
+            "node": "Plan OpenAI Image Slot",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait for OpenAI Image Slot": {
+      "main": [
+        [
+          {
+            "node": "Plan OpenAI Image Slot",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Image Pipeline Input": {
+      "main": [
+        [
+          {
+            "node": "Has Existing Images?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Existing Images?": {
+      "main": [
+        [
+          {
+            "node": "Restore Existing Images",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Use Saved Generation?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Restore Existing Images": {
+      "main": [
+        [
+          {
+            "node": "Validate and Package",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Use Saved Generation?": {
+      "main": [
+        [
+          {
+            "node": "Decode Generated Image",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Images One at a Time",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "availableInMCP": true,
+    "timezone": "Africa/Cairo",
+    "saveExecutionProgress": true,
+    "callerPolicy": "workflowsFromAList",
+    "callerIds": "IMjOAASJew6ueG10"
+  },
+  "active": false,
+  "id": "I9bW653F3A14THuT",
+  "versionId": "187ebea8-9691-44e2-b3e5-c88d89e9474a",
+  "nodeGroups": [
+    {
+      "id": "25f35584-05d0-44c6-976a-0fa65f826541",
+      "name": "Input Contract",
+      "nodeNames": [
+        "Normalize Image Pipeline Input"
+      ],
+      "description": "Normalizes the state and image plan received from the parent workflow."
+    },
+    {
+      "id": "37a774bf-4722-4609-aa12-4e4792093cf4",
+      "name": "Image Processing",
+      "nodeNames": [
+        "Has Existing Images?",
+        "Restore Existing Images",
+        "Images One at a Time",
+        "Prepare OpenAI Image",
+        "Plan OpenAI Image Slot",
+        "Reserve OpenAI Image Slot",
+        "Check OpenAI Image Slot",
+        "OpenAI Image Slot Ready",
+        "Wait for OpenAI Image Slot",
+        "Generate Featured Image",
+        "Read OpenAI Image Response",
+        "OpenAI Image Complete",
+        "OpenAI Image Retry",
+        "Wait for OpenAI Image Retry",
+        "Decode Generated Image",
+        "Download Site Logo",
+        "Resize Site Logo",
+        "Prepare Branded Image",
+        "Create Exact WebP",
+        "Render Arabic Image Title",
+        "Validate and Package",
+        "Use Saved Generation?"
+      ],
+      "description": "Reuse saved images or generate them, preserve article context, and return one validated review package."
+    }
+  ],
+  "tags": []
+}

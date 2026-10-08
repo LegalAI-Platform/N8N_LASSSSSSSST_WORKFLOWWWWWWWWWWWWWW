@@ -1,0 +1,67 @@
+{
+  "spreadsheetId": "1F1ePNxEyhGGAaXcid_qLuOn8-GRMhC16MKFWXWc0rx0",
+  "tabs": [
+    {
+      "name": "Topics",
+      "sheetId": 132904015,
+      "range": "A:Y",
+      "headers": [
+        "topic_id",
+        "topic",
+        "keyword",
+        "status",
+        "run_id",
+        "revision",
+        "wordpress_post_id",
+        "wordpress_url",
+        "reason",
+        "batch_id",
+        "worker_execution_id",
+        "reservation_token",
+        "reserved_at",
+        "lease_until",
+        "review_token",
+        "review_deadline",
+        "attempt_count",
+        "next_retry_at",
+        "last_error",
+        "completed_at",
+        "stage",
+        "media_ids",
+        "wp_slug",
+        "failure_class",
+        "heartbeat_at"
+      ]
+    },
+    {
+      "name": "Runs",
+      "sheetId": 8707001,
+      "range": "A:W",
+      "headers": [
+        "batch_id",
+        "local_date",
+        "scheduled_at",
+        "status",
+        "target_count",
+        "accepted_count",
+        "rejected_count",
+        "timed_out_count",
+        "blocked_count",
+        "skipped_count",
+        "attempted_count",
+        "max_candidates",
+        "max_parallel_workers",
+        "started_at",
+        "last_heartbeat_at",
+        "completed_at",
+        "last_error",
+        "summary_sent",
+        "active_count",
+        "waiting_count",
+        "notification",
+        "notification_sent",
+        "schema_version"
+      ]
+    }
+  ]
+}

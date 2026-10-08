@@ -1,0 +1,353 @@
+{
+  "name": "LAsST_TELEGRAM_REVIEW_V1",
+  "nodes": [
+    {
+      "id": "a632d58a-fd6d-4b6a-b817-8c2f5493f24d",
+      "name": "Review Pipeline Input",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "inputSource": "passthrough",
+        "returnOutput": "allRuns"
+      }
+    },
+    {
+      "id": "9dcc9b46-cbf1-47cc-8584-3de0ddb6a543",
+      "name": "Normalize Review Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        300,
+        0
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const s=JSON.parse(JSON.stringify($json.state||$json));return [{json:s,...($binary?{binary:$binary}:{}),pairedItem:{item:0}}];"
+      }
+    },
+    {
+      "id": "1e4ec95e-b2a0-4077-bc5f-09174551f5fd",
+      "name": "Send Article Package",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        560,
+        0
+      ],
+      "parameters": {
+        "operation": "sendDocument",
+        "chatId": "={{ $json.settings?.telegram_chat_id || $json.telegram_chat_id }}",
+        "binaryData": true,
+        "binaryPropertyName": "article",
+        "additionalFields": {
+          "caption": "={{ 'المقال الكامل + الصورة + SEO + تقرير المراجعة\\n'+$json.article.title+'\\nالنسخة: '+$json.review_token+'\\n'+($json.review_warning?'⚠️ تنبيه مراجعة — لا يمنع النشر تلقائيًا:\\n'+String($json.review_warning_text||$json.reason||'').slice(0,650):'✅ لا توجد تنبيهات جوهرية من المراجعة الآلية.') }}"
+        }
+      },
+      "webhookId": "61d6d758-1eab-401c-99c8-2c08693c2420",
+      "credentials": {
+        "telegramApi": {
+          "id": "wj4rFLhl92z4ctIR",
+          "name": "Legal Articles Telegram Bot"
+        }
+      }
+    },
+    {
+      "id": "2d95e17c-9bc2-4059-a96c-149cea9fefde",
+      "name": "Keep Article Receipt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        760,
+        0
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const p=$('Normalize Review Input').item;const s=JSON.parse(JSON.stringify(p.json));s.telegram_document_id=$json.result?.message_id||$json.message_id;return [{json:s,...(p.binary?{binary:p.binary}:{}),pairedItem:{item:0}}];"
+      }
+    },
+    {
+      "id": "d801da7c-04a3-455f-bb6f-1ea565553396",
+      "name": "Send WebP Image",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        980,
+        0
+      ],
+      "parameters": {
+        "operation": "sendDocument",
+        "chatId": "={{ $json.settings?.telegram_chat_id || $json.telegram_chat_id }}",
+        "binaryData": true,
+        "binaryPropertyName": "image",
+        "additionalFields": {
+          "caption": "={{ $json.image.alt_text }}"
+        }
+      },
+      "webhookId": "2c0bf376-8d51-4d9b-ad74-9a07202eb207",
+      "credentials": {
+        "telegramApi": {
+          "id": "wj4rFLhl92z4ctIR",
+          "name": "Legal Articles Telegram Bot"
+        }
+      }
+    },
+    {
+      "id": "cb87c9ba-dc35-4af6-af9c-e8abb6f17ad6",
+      "name": "Awaiting Review State",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        0
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const s=JSON.parse(JSON.stringify($('Keep Article Receipt').item.json));s.telegram_image_id=$json.result?.message_id||$json.message_id;s.review_deadline=s.review_deadline||$now.plus({hours:48}).toISO();return [{json:s}];"
+      }
+    },
+    {
+      "id": "87afab8c-72b7-44a4-aad1-21293d0ec014",
+      "name": "Review Request Context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1420,
+        0
+      ],
+      "parameters": {
+        "jsCode": "\nfunction articleSections(html){\n const hs=[...html.matchAll(/<h2\\b[^>]*>[\\s\\S]*?<\\/h2>/gi)];\n return hs.map((m,i)=>{\n  const start=m.index+m[0].length,end=i+1<hs.length?hs[i+1].index:html.length;\n  const raw=html.slice(start,end),tail=(raw.match(/(?:\\s|<!--\\s*ARTICLE_IMAGE_[123]\\s*-->)*$/)||[''])[0];\n  return {id:'section_'+i,heading:m[0].replace(/<[^>]*>/g,'').trim(),start,end:end-tail.length,body_html:raw.slice(0,raw.length-tail.length)};\n });\n}\n\nreturn $input.all().map((item,i)=>{\n const s=item.json,sections=articleSections(String(s.article?.content_html||''));\n s.review_section_options=['تحديد تلقائي من الملاحظات',...sections.map(x=>x.id+' | '+x.heading),'العنوان الرئيسي فقط','عنوان SEO فقط','وصف الميتا فقط','كل نص المقال'];\n return {json:s,...(item.binary?{binary:item.binary}:{}),pairedItem:{item:i}};\n});\n"
+      }
+    },
+    {
+      "id": "a3f32089-b3ec-4d35-8541-ac66134869d1",
+      "name": "Telegram Decision",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1640,
+        0
+      ],
+      "parameters": {
+        "operation": "sendAndWait",
+        "chatId": "={{ $json.settings?.telegram_chat_id || $json.telegram_chat_id }}",
+        "message": "={{ String('المقال: '+$json.article.title+'\\n'+($json.review_warning?'⚠️ تنبيه المراجعة الآلية (للاطلاع فقط — لا يمنع النشر):\\n'+String($json.review_warning_text||$json.reason||'').slice(0,2400):'✅ لم تسجل المراجعة الآلية تنبيهات جوهرية. Rank Math لم يُقَس بعد؛ الهدف 95/100.')+'\\n\\nالقرار النهائي لك عبر Telegram: موافقة = إنشاء مسودة WordPress، تعديل = إعادة المراجعة، رفض = رفض المقال وعدم إنشاء المسودة.\\nتعديل النص فقط: يحافظ على الصور ويغيّر الأقسام المطلوبة. تعديل النص والصور: يجهز صورًا جديدة.\\nالنسخة الحالية: '+$json.review_token).replace(/[_*\\[\\]()~>#+\\-=|{}.!]/g,' ').replace(/[&<>]/g,' ') }}",
+        "responseType": "customForm",
+        "defineForm": "json",
+        "jsonOutput": "={{ JSON.stringify([{\"fieldLabel\":\"القرار\",\"fieldType\":\"dropdown\",\"fieldOptions\":{\"values\":[{\"option\":\"موافقة\"},{\"option\":\"تعديل\"},{\"option\":\"رفض\"}]},\"requiredField\":true},{\"fieldLabel\":\"نطاق التعديل\",\"fieldType\":\"dropdown\",\"defaultValue\":\"تعديل النص فقط\",\"fieldOptions\":{\"values\":[{\"option\":\"تعديل النص فقط\"},{\"option\":\"تعديل النص والصور\"}]},\"requiredField\":false},{fieldLabel:\"القسم المطلوب تعديله\",fieldType:\"dropdown\",defaultValue:\"تحديد تلقائي من الملاحظات\",fieldOptions:{values:($json.review_section_options||['تحديد تلقائي من الملاحظات']).map(option=>({option}))},requiredField:false},{\"fieldLabel\":\"ملاحظات التعديل\",\"fieldType\":\"textarea\",\"placeholder\":\"مثال: أعد صياغة الخلاصة القانونية فقط لتكون أوضح. لتغيير الصور اختر تعديل النص والصور واذكر المطلوب.\",\"requiredField\":false},{fieldName:\"review_token\",fieldType:\"hiddenField\",fieldValue:$json.review_token}]) }}",
+        "options": {
+          "messageButtonLabel": "مراجعة واتخاذ القرار",
+          "responseFormTitle": "قرار مراجعة المقال",
+          "responseFormDescription": "={{ $json.article.title + ' — النص فقط يحافظ على الصور. حدّد القسم أو اكتب المطلوب في الملاحظات. ' + $json.review_token }}",
+          "responseFormButtonLabel": "إرسال القرار",
+          "limitWaitTime": {
+            "values": {
+              "limitType": "atSpecifiedTime",
+              "maxDateAndTime": "={{ $json.review_deadline }}"
+            }
+          },
+          "appendAttribution": false
+        }
+      },
+      "webhookId": "c89e0760-c42a-4a3c-b39b-87364c65f5d5",
+      "credentials": {
+        "telegramApi": {
+          "id": "wj4rFLhl92z4ctIR",
+          "name": "Legal Articles Telegram Bot"
+        }
+      }
+    },
+    {
+      "id": "ec3c6f19-0313-41b5-a167-c460ce10538b",
+      "name": "Parse Decision",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1860,
+        0
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "\nconst s=JSON.parse(JSON.stringify($('Review Request Context').item.json)),d=$json.data||{};\nif(!d['القرار']&&s.review_deadline&&Date.parse(s.review_deadline)<=Date.now()){s.decision='timeout';s.reason='انتهت مهلة المراجعة 48 ساعة دون قرار';return [{json:s}];}\nif(s.review_deadline&&Date.parse(s.review_deadline)<Date.now())throw new Error('Expired review token');\nif(d.review_token!==s.review_token)throw new Error('Stale or mismatched article revision');\nconst map={'موافقة':'approve','تعديل':'revise','رفض':'reject'};\ns.decision=map[d['القرار']];if(!s.decision)throw new Error('Unknown decision');\ns.feedback=String(d['ملاحظات التعديل']||'').trim();\nconst scope=String(d['نطاق التعديل']||'تعديل النص فقط').trim();\ns.revision_scope=scope==='تعديل النص والصور'?'text_and_images':'text_only';\ns.revision_target=String(d['القسم المطلوب تعديله']||'تحديد تلقائي من الملاحظات').trim();\nif(s.decision==='revise'&&!s.feedback){s.decision='missing_feedback';s.reason='اكتب التعديلات المطلوبة في خانة الملاحظات.';}\nreturn [{json:s}];\n"
+      }
+    },
+    {
+      "id": "b0d11900-2724-493d-b24b-1b59be0c1349",
+      "name": "Review Request Only?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        440,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.decision === 'missing_feedback' }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    }
+  ],
+  "connections": {
+    "Review Pipeline Input": {
+      "main": [
+        [
+          {
+            "node": "Normalize Review Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Article Package": {
+      "main": [
+        [
+          {
+            "node": "Keep Article Receipt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Keep Article Receipt": {
+      "main": [
+        [
+          {
+            "node": "Send WebP Image",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send WebP Image": {
+      "main": [
+        [
+          {
+            "node": "Awaiting Review State",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Awaiting Review State": {
+      "main": [
+        [
+          {
+            "node": "Review Request Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Review Request Context": {
+      "main": [
+        [
+          {
+            "node": "Telegram Decision",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Telegram Decision": {
+      "main": [
+        [
+          {
+            "node": "Parse Decision",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Review Input": {
+      "main": [
+        [
+          {
+            "node": "Review Request Only?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Review Request Only?": {
+      "main": [
+        [
+          {
+            "node": "Review Request Context",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send Article Package",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "availableInMCP": true,
+    "timezone": "Africa/Cairo",
+    "saveExecutionProgress": true,
+    "callerPolicy": "workflowsFromAList",
+    "callerIds": "IMjOAASJew6ueG10"
+  },
+  "active": false,
+  "id": "LvPZSaHkuamQyLw2",
+  "versionId": "e67085f9-3f3e-43ec-804e-29f10f613126",
+  "nodeGroups": [
+    {
+      "id": "9d2858d0-6b0c-430c-8582-949ba6da4229",
+      "name": "Human Decision",
+      "nodeNames": [
+        "Review Request Context",
+        "Telegram Decision",
+        "Parse Decision"
+      ],
+      "description": "Builds the review form, waits for the human response, and returns a normalized decision."
+    },
+    {
+      "id": "3cb119b7-c352-47c1-9375-5feffc028349",
+      "name": "Telegram Delivery",
+      "nodeNames": [
+        "Send Article Package",
+        "Keep Article Receipt",
+        "Send WebP Image",
+        "Awaiting Review State"
+      ],
+      "description": "Deliver article and image while retaining the parent review deadline."
+    }
+  ],
+  "tags": []
+}

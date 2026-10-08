@@ -1,0 +1,589 @@
+{
+  "name": "UPDATES_DISPATCHER_WATCHDOG",
+  "nodes": [
+    {
+      "id": "8b270e19-3f98-47ac-a878-b4652bd2261e",
+      "name": "Every Five Minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.4,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 5
+            }
+          ]
+        },
+        "misfirePolicy": "coalesce"
+      }
+    },
+    {
+      "id": "1f8cfa87-8cdb-4cfe-981b-2581eb79e09e",
+      "name": "Dispatch Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        0
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "return [{json:{mode:$json.mode||'tick',dry_run:$json.dry_run===true}}];"
+      }
+    },
+    {
+      "id": "da6693e0-4729-4660-b8df-5105d847d1ce",
+      "name": "Read Coordination Version",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1100,
+        0
+      ],
+      "parameters": {
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleSheetsOAuth2Api",
+        "options": {
+          "timeout": 30000
+        },
+        "url": "https://sheets.googleapis.com/v4/spreadsheets/1F1ePNxEyhGGAaXcid_qLuOn8-GRMhC16MKFWXWc0rx0?fields=spreadsheetId,namedRanges"
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "VuRl2ldGVeXPpeVF",
+          "name": "Google Sheets account 2"
+        }
+      }
+    },
+    {
+      "id": "7282cd35-3186-4981-8767-d8d71277dc45",
+      "name": "Read Daily Ledger",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1320,
+        0
+      ],
+      "parameters": {
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleSheetsOAuth2Api",
+        "options": {
+          "timeout": 30000
+        },
+        "url": "https://sheets.googleapis.com/v4/spreadsheets/1F1ePNxEyhGGAaXcid_qLuOn8-GRMhC16MKFWXWc0rx0/values:batchGet?ranges=Topics!A:Y&ranges=Runs!A:W"
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "VuRl2ldGVeXPpeVF",
+          "name": "Google Sheets account 2"
+        }
+      }
+    },
+    {
+      "id": "92a6077f-a188-4184-84a6-6f20db0b8289",
+      "name": "Plan Dispatch",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1540,
+        0
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "function planDispatch(meta, response, input, cfg, nowISO, executionId) {\n  const now=new Date(nowISO), ts=now.getTime();\n  const local=new Intl.DateTimeFormat('en-CA',{timeZone:cfg.timezone,year:'numeric',month:'2-digit',day:'2-digit'}).format(now);\n  const timeParts=new Intl.DateTimeFormat('en-GB',{timeZone:cfg.timezone,hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).formatToParts(now);\n  const minuteOfDay=Number(timeParts.find(p=>p.type==='hour').value)*60+Number(timeParts.find(p=>p.type==='minute').value);\n  const canDispatch=input.mode==='manual_daily'||minuteOfDay>=4*60+50;\n  const values=response.valueRanges||[];\n  const read=(index,headers)=>{const v=values[index]?.values||[];if(JSON.stringify(v[0])!==JSON.stringify(headers))throw new Error('Schema changed: '+index);return v.slice(1).map((row,i)=>Object.fromEntries(headers.map((h,j)=>[h,row[j]??'']).concat([['_row',i+1]])));};\n  const topics=read(0,cfg.topic_headers).filter(r=>r.topic_id), runs=read(1,cfg.run_headers).filter(r=>r.batch_id);\n  const seen=new Set();for(const t of topics){if(seen.has(String(t.topic_id)))throw new Error('Duplicate topic_id: '+t.topic_id);seen.add(String(t.topic_id));}\n  const commits=(meta.namedRanges||[]).map(x=>/^UPDATES_COMMIT_(\\d+)$/.exec(x.name||'')).filter(Boolean).map(x=>Number(x[1]));\n  const revision=Math.max(0,...commits)+1;\n  const requests=[],jobs=[],notices=[];\n  const cell=v=>({userEnteredValue:typeof v==='number'?{numberValue:v}:{stringValue:String(v??'')}});\n  function write(gid,row,headers,obj){requests.push({updateCells:{start:{sheetId:gid,rowIndex:row,columnIndex:0},rows:[{values:headers.map(k=>cell(obj[k]))}],fields:'userEnteredValue'}});}\n  const terminal=new Set(['completed','partial','skipped_overlap']);\n  let active=runs.filter(r=>!terminal.has(r.status));\n  if(active.length>1)throw new Error('Multiple active batches: stop for reconciliation');\n  let run=active[0],today=runs.find(r=>r.local_date===local);\n  if(run){\n    const before=JSON.stringify(run),previousHeartbeat=run.last_heartbeat_at;\n    const members=topics.filter(t=>t.batch_id===run.batch_id);\n    const done=members.filter(t=>t.status==='draft_created'&&Number(t.wordpress_post_id)>0&&t.wordpress_url);\n    const busy=members.filter(t=>['queued','processing','awaiting_review','revising','retry_wait'].includes(t.status));\n    const blocked=members.filter(t=>t.status==='blocked');\n    const stalled=busy.filter(t=>t.status!=='awaiting_review'&&t.lease_until&&Date.parse(t.lease_until)<ts);\n    const overdue=busy.filter(t=>t.status==='awaiting_review'&&t.review_deadline&&Date.parse(t.review_deadline)+15*60000<ts);\n    Object.assign(run,{accepted_count:done.length,rejected_count:members.filter(t=>t.status==='rejected').length,timed_out_count:members.filter(t=>t.status==='timed_out').length,blocked_count:blocked.length,skipped_count:members.filter(t=>t.status==='skipped').length,attempted_count:members.length,active_count:busy.length,waiting_count:busy.filter(t=>t.status==='awaiting_review').length,last_heartbeat_at:nowISO});\n    const inconsistent=members.find(t=>t.status==='draft_created'&&(!Number(t.wordpress_post_id)||!t.wordpress_url));\n    const globalFailure=blocked.find(t=>['auth','configuration','ambiguous_write','quota'].includes(t.failure_class));\n    if(run.status==='blocked'||stalled.length||overdue.length||globalFailure||inconsistent){\n      run.status='blocked';run.last_error=run.last_error||globalFailure?.last_error||(inconsistent?'Draft needs reconciliation: '+inconsistent.topic_id:'')||('Execution needs reconciliation: '+[...stalled,...overdue].map(t=>t.topic_id).join(', '));\n    }else if(done.length>=Number(run.target_count)&&busy.length===0){\n      run.status='completed';run.completed_at=nowISO;\n    }else{\n      for(const t of busy.filter(t=>canDispatch&&t.status==='queued'&&Date.parse(t.reserved_at)+4*60000<ts))jobs.push({batch_id:run.batch_id,topic_id:String(t.topic_id),reservation_token:t.reservation_token,attempt:Number(t.attempt_count)||1});\n    run.status=busy.some(t=>t.status==='awaiting_review')?'awaiting_review':'running';\n      const available=topics.filter(t=>['','pending'].includes(String(t.status).trim().toLowerCase())&&!t.batch_id&&!t.wordpress_post_id&&!t.wordpress_url&&t.topic); available.sort((a,b)=>Number(a._row)-Number(b._row)||String(a.topic_id).localeCompare(String(b.topic_id),undefined,{numeric:true}));\n      const remaining=Number(run.target_count)-done.length-busy.length;\n      const count=canDispatch?Math.max(0,Math.min(Number(run.max_parallel_workers)-busy.length,remaining,Number(run.max_candidates)-members.length,available.length)):0;\n      for(let i=0;i<count;i++){\n        const t=available.shift();\n        const token='u'+revision+'_'+String(t.topic_id).replace(/[^A-Za-z0-9_]/g,'_')+'_'+i;\n        Object.assign(t,{status:'queued',batch_id:run.batch_id,reservation_token:token,reserved_at:nowISO,lease_until:new Date(ts+60*60000).toISOString(),attempt_count:1,stage:'queued',last_error:'',failure_class:'',heartbeat_at:nowISO});\n        write(cfg.topics_gid,t._row,cfg.topic_headers,t);\n        jobs.push({batch_id:run.batch_id,topic_id:String(t.topic_id),reservation_token:token,attempt:1});\n      }\n      run.attempted_count=members.length+count;run.active_count=busy.length+count;\n      if(canDispatch&&!busy.length&&!count){run.status='partial';run.completed_at=nowISO;run.last_error=members.length>=Number(run.max_candidates)?'Candidate limit reached':'No eligible pending topics';}\n    }\n    if(['completed','partial','blocked'].includes(run.status)&&!run.summary_sent){\n      notices.push({text:'دفعة '+run.batch_id+' — '+run.status+'\\nمسودات مؤكدة: '+run.accepted_count+'/10\\nمرفوض: '+run.rejected_count+' | انتهت المراجعة: '+run.timed_out_count+' | متعطل: '+run.blocked_count+'\\n'+run.last_error,batch_id:run.batch_id});\n      run.notification=notices[notices.length-1].text;run.notification_sent='';run.summary_sent='queued';\n    }\n    const current={...run,last_heartbeat_at:previousHeartbeat};\n    if(JSON.stringify(current)!==before||!previousHeartbeat||Date.parse(previousHeartbeat)+3600000<ts)write(cfg.runs_gid,run._row,cfg.run_headers,run);\n  }\n  const requested=canDispatch;\n  if(requested&&!today){\n    const batchId='updates_'+local;\n    const row=(values[1]?.values?.length||1);\n    const fresh={batch_id:batchId,local_date:local,scheduled_at:local+' 04:50 Africa/Cairo',status:run&&!terminal.has(run.status)?'skipped_overlap':'running',target_count:cfg.target,accepted_count:0,rejected_count:0,timed_out_count:0,blocked_count:0,skipped_count:0,attempted_count:0,max_candidates:cfg.max_candidates,max_parallel_workers:cfg.max_parallel,started_at:nowISO,last_heartbeat_at:nowISO,completed_at:'',last_error:'',summary_sent:'',active_count:0,waiting_count:0,notification:'',notification_sent:'',schema_version:1,_row:row};\n    if(fresh.status==='skipped_overlap'){\n      fresh.completed_at=nowISO;fresh.last_error='Previous batch still active: '+run.batch_id;\n      notices.push({text:'لم تبدأ دفعة '+local+' لأن دفعة '+run.batch_id+' ما زالت '+run.status,batch_id:batchId});\n    }else{\n      notices.push({text:'بدأت دفعة '+local+' — الهدف 10 مسودات مقبولة، بحد أقصى مقالين معًا.',batch_id:batchId});\n      const available=topics.filter(t=>['','pending'].includes(String(t.status).trim().toLowerCase())&&!t.batch_id&&!t.wordpress_post_id&&!t.wordpress_url&&t.topic); available.sort((a,b)=>Number(a._row)-Number(b._row)||String(a.topic_id).localeCompare(String(b.topic_id),undefined,{numeric:true}));\n      for(let i=0;i<Math.min(cfg.max_parallel,available.length);i++){\n        const t=available[i],token='u'+revision+'_'+String(t.topic_id).replace(/[^A-Za-z0-9_]/g,'_')+'_'+i;\n        Object.assign(t,{status:'queued',batch_id:batchId,reservation_token:token,reserved_at:nowISO,lease_until:new Date(ts+60*60000).toISOString(),attempt_count:1,stage:'queued',last_error:'',failure_class:'',heartbeat_at:nowISO});\n        write(cfg.topics_gid,t._row,cfg.topic_headers,t);jobs.push({batch_id:batchId,topic_id:String(t.topic_id),reservation_token:token,attempt:1});\n      }\n      fresh.attempted_count=jobs.filter(j=>j.batch_id===batchId).length;fresh.active_count=fresh.attempted_count;\n    }\n    fresh.notification=notices[notices.length-1]?.text||'';\n    write(cfg.runs_gid,row,cfg.run_headers,fresh);\n  }\n  for(const r of runs)if(r.notification&&!r.notification_sent&&!notices.some(n=>n.batch_id===r.batch_id))notices.push({text:r.notification,batch_id:r.batch_id});\n  if(!requests.length&&!jobs.length&&!notices.length)return {requests:[],jobs:[],notices:[],revision};\n  const range={sheetId:cfg.runs_gid,startRowIndex:0,endRowIndex:1,startColumnIndex:0,endColumnIndex:1};\n  requests.unshift({addNamedRange:{namedRange:{namedRangeId:'updates_commit_'+revision,name:'UPDATES_COMMIT_'+revision,range}}});\n  return {requests,jobs,notices,revision,execution_id:String(executionId)};\n}\nconst plan=planDispatch($('Read Coordination Version').first().json,$json,$('Dispatch Request').first().json,{\"sheet_id\":\"1F1ePNxEyhGGAaXcid_qLuOn8-GRMhC16MKFWXWc0rx0\",\"topics_gid\":132904015,\"runs_gid\":8707001,\"topic_headers\":[\"topic_id\",\"topic\",\"keyword\",\"status\",\"run_id\",\"revision\",\"wordpress_post_id\",\"wordpress_url\",\"reason\",\"batch_id\",\"worker_execution_id\",\"reservation_token\",\"reserved_at\",\"lease_until\",\"review_token\",\"review_deadline\",\"attempt_count\",\"next_retry_at\",\"last_error\",\"completed_at\",\"stage\",\"media_ids\",\"wp_slug\",\"failure_class\",\"heartbeat_at\"],\"run_headers\":[\"batch_id\",\"local_date\",\"scheduled_at\",\"status\",\"target_count\",\"accepted_count\",\"rejected_count\",\"timed_out_count\",\"blocked_count\",\"skipped_count\",\"attempted_count\",\"max_candidates\",\"max_parallel_workers\",\"started_at\",\"last_heartbeat_at\",\"completed_at\",\"last_error\",\"summary_sent\",\"active_count\",\"waiting_count\",\"notification\",\"notification_sent\",\"schema_version\"],\"target\":10,\"max_candidates\":15,\"max_parallel\":2,\"worker_id\":\"IMjOAASJew6ueG10\",\"timezone\":\"Africa/Cairo\"},$now.toISO(),$execution.id);\nreturn [{json:{...plan,dry_run:$('Dispatch Request').first().json.dry_run}}];"
+      }
+    },
+    {
+      "id": "58f4563a-6ddd-4525-b97b-9a83fb57aaa4",
+      "name": "Commit Required",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1760,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ !$json.dry_run && $json.requests.length > 0 }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "a0647675-8c7a-4e5e-b06f-4073c523633b",
+      "name": "Commit Reservations",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1980,
+        0
+      ],
+      "parameters": {
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleSheetsOAuth2Api",
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          }
+        },
+        "method": "POST",
+        "url": "https://sheets.googleapis.com/v4/spreadsheets/1F1ePNxEyhGGAaXcid_qLuOn8-GRMhC16MKFWXWc0rx0:batchUpdate",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({requests:$json.requests}) }}"
+      },
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "VuRl2ldGVeXPpeVF",
+          "name": "Google Sheets account 2"
+        }
+      }
+    },
+    {
+      "id": "d5d3159f-e98b-40f0-9690-258f2886126d",
+      "name": "Check Commit",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2200,
+        0
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "if($json.statusCode>=200&&$json.statusCode<300)return [{json:$('Plan Dispatch').first().json}];\nconst message=String($json.body?.error?.message||'Commit failed');\nif($json.statusCode===400&&/UPDATES_COMMIT_.*already exists|already exists.*UPDATES_COMMIT_/i.test(message))return [];\nthrow new Error(message);"
+      }
+    },
+    {
+      "id": "247a0a6e-2b58-4219-b32d-29a79314bb9c",
+      "name": "Jobs to Start",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2420,
+        0
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "return $json.jobs.map(j=>({json:j}));"
+      }
+    },
+    {
+      "id": "e885e460-8cde-4a0e-aab4-13a8c1307b41",
+      "name": "Start Article Worker",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.4,
+      "position": [
+        2640,
+        0
+      ],
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "IMjOAASJew6ueG10"
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": false
+        }
+      }
+    },
+    {
+      "id": "84f3ef79-5980-455b-8fca-9bba288f23a3",
+      "name": "Batch Notifications",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2860,
+        0
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "return $json.notices.map(n=>({json:n}));"
+      }
+    },
+    {
+      "id": "7687a6d6-4972-4d04-875f-91cad3d7f1b8",
+      "name": "Send Batch Notification",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        3080,
+        0
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "sendMessage",
+        "chatId": "5731599300",
+        "text": "={{ $json.text.replace(/[&<>]/g,' ') }}",
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "HTML"
+        }
+      },
+      "webhookId": "141daaec-1858-4363-ba5d-9e54091031c4",
+      "credentials": {
+        "telegramApi": {
+          "id": "wj4rFLhl92z4ctIR",
+          "name": "Legal Articles Telegram Bot"
+        }
+      }
+    },
+    {
+      "id": "496c604a-9240-4f09-89eb-f62f9406a809",
+      "name": "Mark Notification Sent",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        3000,
+        500
+      ],
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "1F1ePNxEyhGGAaXcid_qLuOn8-GRMhC16MKFWXWc0rx0"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Runs"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "batch_id": "={{ $('Batch Notifications').item.json.batch_id }}",
+            "notification_sent": "={{ $now.toISO() }}"
+          },
+          "matchingColumns": [
+            "batch_id"
+          ],
+          "schema": [
+            {
+              "id": "batch_id",
+              "displayName": "batch_id",
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "required": false,
+              "display": true,
+              "defaultMatch": true
+            },
+            {
+              "id": "notification_sent",
+              "displayName": "notification_sent",
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "required": false,
+              "display": true,
+              "defaultMatch": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "VuRl2ldGVeXPpeVF",
+          "name": "Google Sheets account 2"
+        }
+      }
+    },
+    {
+      "id": "fc361021-8dc7-4745-ac71-ef01ef59ae8a",
+      "name": "Dispatcher Error",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        3520,
+        0
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "d1323df6-a5f4-46f4-972f-905de1674da1",
+      "name": "Notify Dispatcher Failure",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        3740,
+        0
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "sendMessage",
+        "chatId": "5731599300",
+        "text": "={{ 'تعطل منسق المقالات. التنفيذ: '+($json.execution?.id||'unknown')+' — '+String($json.execution?.error?.message||$json.trigger?.error?.message||'Unknown error').slice(0,1500).replace(/[&<>]/g,' ') }}",
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "HTML"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "webhookId": "5c9d6e27-19e9-427c-9562-7a081a5b15bb",
+      "credentials": {
+        "telegramApi": {
+          "id": "wj4rFLhl92z4ctIR",
+          "name": "Legal Articles Telegram Bot"
+        }
+      }
+    },
+    {
+      "id": "9a7a37b6-f2b4-40b0-9e44-14be382245dd",
+      "name": "Daily 04:50 Cairo",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.4,
+      "position": [
+        0,
+        -150
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "days",
+              "daysInterval": 1,
+              "triggerAtHour": 4,
+              "triggerAtMinute": 50
+            }
+          ]
+        },
+        "misfirePolicy": "coalesce",
+        "misfireGraceSeconds": 300
+      }
+    }
+  ],
+  "connections": {
+    "Every Five Minutes": {
+      "main": [
+        [
+          {
+            "node": "Dispatch Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Dispatch Request": {
+      "main": [
+        [
+          {
+            "node": "Read Coordination Version",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Coordination Version": {
+      "main": [
+        [
+          {
+            "node": "Read Daily Ledger",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Daily Ledger": {
+      "main": [
+        [
+          {
+            "node": "Plan Dispatch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Plan Dispatch": {
+      "main": [
+        [
+          {
+            "node": "Commit Required",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Commit Required": {
+      "main": [
+        [
+          {
+            "node": "Commit Reservations",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Commit Reservations": {
+      "main": [
+        [
+          {
+            "node": "Check Commit",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Commit": {
+      "main": [
+        [
+          {
+            "node": "Jobs to Start",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Batch Notifications",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Jobs to Start": {
+      "main": [
+        [
+          {
+            "node": "Start Article Worker",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Batch Notifications": {
+      "main": [
+        [
+          {
+            "node": "Send Batch Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Batch Notification": {
+      "main": [
+        [
+          {
+            "node": "Mark Notification Sent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Dispatcher Error": {
+      "main": [
+        [
+          {
+            "node": "Notify Dispatcher Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Daily 04:50 Cairo": {
+      "main": [
+        [
+          {
+            "node": "Dispatch Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "availableInMCP": true,
+    "timezone": "Africa/Cairo",
+    "saveExecutionProgress": true,
+    "executionTimeout": 180,
+    "callerPolicy": "none",
+    "callerIds": ""
+  },
+  "active": false,
+  "id": "0CPzkx20lBJjxDnP",
+  "versionId": "66fdb353-df58-4077-9038-9a8727a5e26c",
+  "nodeGroups": [
+    {
+      "id": "201479f9-68dd-496d-9d58-b649a653406a",
+      "name": "Read and reserve",
+      "nodeNames": [
+        "Dispatch Request",
+        "Read Coordination Version",
+        "Read Daily Ledger",
+        "Plan Dispatch",
+        "Commit Required",
+        "Commit Reservations",
+        "Check Commit"
+      ],
+      "description": "Read persisted state and claim a unique atomic commit before launching workers."
+    },
+    {
+      "id": "35567310-7bf3-4727-9ed0-aeb820cf2e8e",
+      "name": "Dispatch",
+      "nodeNames": [
+        "Jobs to Start",
+        "Start Article Worker"
+      ],
+      "description": "One article execution per reservation."
+    },
+    {
+      "id": "f3d762c6-d8f9-4116-9186-4a761b855556",
+      "name": "Reports",
+      "nodeNames": [
+        "Batch Notifications",
+        "Send Batch Notification",
+        "Mark Notification Sent"
+      ],
+      "description": "Deliver batch reports with a persistent delivery marker."
+    }
+  ],
+  "tags": []
+}

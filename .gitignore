@@ -1,0 +1,11 @@
+# Local credentials and execution payloads must stay outside version control.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials*.json
+secrets*.json
+executions/
+node_modules/
+.DS_Store

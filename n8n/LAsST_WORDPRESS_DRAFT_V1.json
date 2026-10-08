@@ -1,0 +1,1038 @@
+{
+  "name": "LAsST_WORDPRESS_DRAFT_V1",
+  "nodes": [
+    {
+      "parameters": {
+        "inputSource": "passthrough",
+        "returnOutput": "allRuns"
+      },
+      "id": "da4df9a2-cff5-4b02-976d-f01975ab24f7",
+      "name": "WordPress Draft Input",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        -128
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const s=JSON.parse(JSON.stringify($json.state||$json));return [{json:s,...($binary?{binary:$binary}:{}),pairedItem:{item:0}}];"
+      },
+      "id": "54182a84-e116-4649-a21d-c021f4dc034b",
+      "name": "Normalize WordPress Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        288,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.settings.site_url + '/wp-json/wp/v2/posts?context=edit&status=draft,publish,pending,private,future&slug='+encodeURIComponent($json.article.slug) }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "options": {
+          "redirect": {
+            "redirect": {
+              "followRedirects": false
+            }
+          },
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "responseFormat": "json"
+            }
+          },
+          "timeout": 120000
+        }
+      },
+      "id": "2e54d6a2-ee84-40c3-98ac-404d39557b07",
+      "name": "Find Existing WordPress Post",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        816,
+        0
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "onError": "continueErrorOutput",
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "JYEoFNynceC4hZhp",
+          "name": "Saad WordPress Application Password"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const s=JSON.parse(JSON.stringify($('Normalize WordPress Input').item.json));const list=$json.body;if(!Array.isArray(list))throw new Error('Unexpected WordPress lookup response');\nconst marker='<!-- n8n-legal-topic:'+s.topic.topic_id+' -->';s.marker=marker;\nif(list.length>1)throw new Error('Ambiguous WordPress slug: multiple posts require reconciliation');\nif(list.length){const p=list[0];if(p.status!=='draft'||!String(p.content?.raw||p.content?.rendered||'').includes(marker))throw new Error('Slug already belongs to another article or a published post; manual check required.');if(!Number.isInteger(p.featured_media)||p.featured_media<=0)throw new Error('Existing draft needs image recovery; do not create a duplicate.');s.wp_post_id=p.id;s.wp_url=s.settings.site_url+'/?p='+p.id+'&preview=true';s.already_created=true;}\nelse s.already_created=false;return [{json:s}];"
+      },
+      "id": "3a46cf9f-4eb9-41d3-86b1-b94e5e47ea6f",
+      "name": "Check Draft Idempotency",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1040,
+        0
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "805aa4c1-873f-47b9-a0eb-d171f77dec2e",
+              "leftValue": "={{ $json.already_created }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "9b707220-a60f-4ee6-9497-b9ef859d416b",
+      "name": "Draft Already Exists",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1264,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const s=JSON.parse(JSON.stringify($json));if(!s.wp_post_id||!s.wp_url)throw new Error('Missing confirmed draft');\nif(!s.approved.some(a=>a.topic_id===s.topic.topic_id)){s.approved_count++;s.approved.push({topic_id:s.topic.topic_id,title:s.article.title,url:s.wp_url});}\ns.reason='Approved version '+s.review_token;\nconst draftMessage=[\n'تم إنشاء مسودة WordPress بعد الموافقة.',\nString(s.article.title),\n'رابط المعاينة (يتطلب تسجيل دخول):',\ns.wp_url,\n'رابط التحرير:',\ns.settings.wp_admin_url+'/post.php?post='+s.wp_post_id+'&action=edit',\ns.rankmath_warning||'Rank Math: يلزم فتح المسودة للتحقق من الدرجة الفعلية؛ الهدف 95/100.',\ns.review_warning?'⚠️ ملاحظات المراجعة محفوظة في تقرير المقال؛ لم تمنع إنشاء المسودة.':'',\n'الدفعة: '+s.batch_id+' — تم تأكيد مسودة هذا المقال'\n].filter(Boolean).join('\\n');\ns.draft_notification_html=draftMessage.slice(0,3800).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');\n\nreturn [{json:s}];"
+      },
+      "id": "dee8b555-d3d3-4d84-b12f-4a3f49cc2881",
+      "name": "Count Accepted Draft",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        5072,
+        0
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst s=$json;\nif(s.decision!=='approve'||!s.passed)throw new Error('Latest human approval required');\nif(!Array.isArray(s.images)||s.images.length!==4)throw new Error('Approved package must have four images');\nconst out=[];\nfor(const im of s.images){\n im.file_name=String(s.topic.topic_id).replace(/[^A-Za-z0-9_-]/g,'-')+'-'+s.reservation_token+'-v'+s.revision+'-'+im.role+'.webp';\n const image=await this.helpers.prepareBinaryData(Buffer.from(im.base64,'base64'),im.file_name,'image/webp');\n const {base64,...metadata}=im;\n out.push({json:{settings:s.settings,article:{title:s.article.title},image:metadata},binary:{image},pairedItem:{item:0}});\n}\nreturn out;"
+      },
+      "id": "a358954c-7486-4615-b81a-75a1b684e7d8",
+      "name": "Prepare Approved Image",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1488,
+        80
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.settings.site_url + \"/wp-json/wp/v2/media\" }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Disposition",
+              "value": "={{ \"attachment; filename=\" + $json.image.file_name }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "image/webp"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "binaryData",
+        "inputDataFieldName": "image",
+        "options": {
+          "redirect": {
+            "redirect": {
+              "followRedirects": false
+            }
+          },
+          "timeout": 120000
+        }
+      },
+      "id": "b2831d41-755c-4bfe-80dd-8474b3cabc42",
+      "name": "Upload Approved Image",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1712,
+        80
+      ],
+      "onError": "continueErrorOutput",
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "JYEoFNynceC4hZhp",
+          "name": "Saad WordPress Application Password"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Prepare Approved Image').item.json.settings.site_url + '/wp-json/wp/v2/media/'+$json.id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({alt_text:$('Prepare Approved Image').item.json.image.alt_text,title:$('Prepare Approved Image').item.json.article.title}) }}",
+        "options": {
+          "redirect": {
+            "redirect": {
+              "followRedirects": false
+            }
+          },
+          "timeout": 120000
+        }
+      },
+      "id": "6369d834-8fb3-4fa4-a8e8-1abf01611dff",
+      "name": "Set Image Alt Text",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1936,
+        80
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "onError": "continueErrorOutput",
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "JYEoFNynceC4hZhp",
+          "name": "Saad WordPress Application Password"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst s=JSON.parse(JSON.stringify($('Check Draft Idempotency').itemMatching(0).json));\nif(s.decision!=='approve'||!s.passed)throw new Error('Latest approval required');\nconst items=$input.all();if(items.length!==4)throw new Error('Four media uploads required');\nconst media=items.map((x,i)=>{\n const image=$('Prepare Approved Image').itemMatching(i).json.image,p=x.json;\n if(!Number.isInteger(p.id)||p.id<=0||typeof p.source_url!=='string'||!p.source_url.startsWith(s.settings.site_url+'/'))throw new Error('Media upload not confirmed');\n return {...image,id:p.id,url:p.source_url};\n});\nif(new Set(media.map(m=>m.role)).size!==4)throw new Error('Duplicate media role');\nconst featured=media.find(m=>m.role==='featured');if(!featured)throw new Error('Missing featured image');\nconst esc=v=>String(v??'').replace(/[&<>\"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',\"'\":'&#39;'}[c]));\nlet content=s.article.content_html;\nfor(const im of media.filter(x=>x.role!=='featured')){\n const marker='<!-- ARTICLE_IMAGE_'+im.index+' -->';\n if(!content.includes(marker))throw new Error('Missing inline image slot '+im.index);\n content=content.replace(marker,'<figure class=\"wp-block-image size-full\"><img src=\"'+esc(im.url)+'\" alt=\"'+esc(im.alt_text)+'\" width=\"1200\" height=\"630\" class=\"wp-image-'+im.id+'\" loading=\"lazy\" decoding=\"async\"></figure>');\n}\nif(/ARTICLE_IMAGE_/.test(content)||(content.match(/<img\\b/g)||[]).length!==3)throw new Error('Invalid inline image count');\nconst a=s.article;\nconst tagNames=(a.existing_tag_ids||[]).map(id=>s.taxonomy.tags.find(t=>Number(t.id)===Number(id))?.name);\nif(tagNames.some(x=>!x))throw new Error('Unknown tag ID');\ns.wp_media_id=featured.id;s.wp_images=media;s.article.content_html=content;\ns.wp_payload={status:'draft',title:a.title,slug:a.slug,post_content:s.marker+'\\n'+content,excerpt:a.meta_description,rankmath_title:a.seo_title,rankmath_description:a.meta_description,categories:[Number(a.category_id)],tags:[...new Set(tagNames)]};\nreturn [{json:s,pairedItem:{item:0}}];"
+      },
+      "id": "652b937e-1896-45af-83fd-08986fc6f6c0",
+      "name": "Prepare WordPress Draft",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2160,
+        80
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $json.settings.sheet_id }}"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "={{ $json.settings.sheet_tab }}"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "topic_id": "={{ $json.topic.topic_id }}",
+            "status": "processing",
+            "run_id": "={{ $json.run_id }}",
+            "revision": "={{ $json.revision || 0 }}",
+            "wordpress_post_id": "={{ $json.wp_post_id || \"\" }}",
+            "wordpress_url": "={{ $json.wp_url || \"\" }}",
+            "reason": "={{ ($json.reason || \"\").slice(0,1500) }}",
+            "worker_execution_id": "={{ String($json.run_id) }}",
+            "batch_id": "={{ $json.batch_id }}",
+            "reservation_token": "={{ $json.reservation_token }}",
+            "stage": "publishing",
+            "heartbeat_at": "={{ $now.toISO() }}",
+            "lease_until": "={{ $now.plus({hours:2}).toISO() }}",
+            "review_token": "={{ $json.review_token || '' }}",
+            "review_deadline": "={{ $json.review_deadline || '' }}",
+            "completed_at": "",
+            "wp_slug": "={{ $json.article?.slug || '' }}",
+            "media_ids": "={{ JSON.stringify(($json.wp_images||[]).map(x=>({id:x.id,role:x.role,url:x.url}))) }}"
+          },
+          "matchingColumns": [
+            "worker_execution_id"
+          ],
+          "schema": [
+            {
+              "id": "topic_id",
+              "displayName": "topic_id",
+              "type": "string",
+              "required": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "defaultMatch": false
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "type": "string",
+              "required": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "defaultMatch": false
+            },
+            {
+              "id": "run_id",
+              "displayName": "run_id",
+              "type": "string",
+              "required": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "defaultMatch": false
+            },
+            {
+              "id": "revision",
+              "displayName": "revision",
+              "type": "string",
+              "required": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "defaultMatch": false
+            },
+            {
+              "id": "wordpress_post_id",
+              "displayName": "wordpress_post_id",
+              "type": "string",
+              "required": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "defaultMatch": false
+            },
+            {
+              "id": "wordpress_url",
+              "displayName": "wordpress_url",
+              "type": "string",
+              "required": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "defaultMatch": false
+            },
+            {
+              "id": "reason",
+              "displayName": "reason",
+              "type": "string",
+              "required": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "defaultMatch": false
+            },
+            {
+              "id": "worker_execution_id",
+              "displayName": "worker_execution_id",
+              "type": "string",
+              "required": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "defaultMatch": true
+            },
+            {
+              "id": "batch_id",
+              "displayName": "batch_id",
+              "type": "string",
+              "required": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "defaultMatch": false
+            },
+            {
+              "id": "reservation_token",
+              "displayName": "reservation_token",
+              "type": "string",
+              "required": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "defaultMatch": false
+            },
+            {
+              "id": "stage",
+              "displayName": "stage",
+              "type": "string",
+              "required": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "defaultMatch": false
+            },
+            {
+              "id": "heartbeat_at",
+              "displayName": "heartbeat_at",
+              "type": "string",
+              "required": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "defaultMatch": false
+            },
+            {
+              "id": "lease_until",
+              "displayName": "lease_until",
+              "type": "string",
+              "required": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "defaultMatch": false
+            },
+            {
+              "id": "review_token",
+              "displayName": "review_token",
+              "type": "string",
+              "required": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "defaultMatch": false
+            },
+            {
+              "id": "review_deadline",
+              "displayName": "review_deadline",
+              "type": "string",
+              "required": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "defaultMatch": false
+            },
+            {
+              "id": "completed_at",
+              "displayName": "completed_at",
+              "type": "string",
+              "required": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "defaultMatch": false
+            },
+            {
+              "id": "wp_slug",
+              "displayName": "wp_slug",
+              "type": "string",
+              "required": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "defaultMatch": false
+            },
+            {
+              "id": "media_ids",
+              "displayName": "media_ids",
+              "type": "string",
+              "required": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "defaultMatch": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {
+          "cellFormat": "RAW"
+        }
+      },
+      "id": "2f4960cf-1b64-4e80-9198-7e8682ee697e",
+      "name": "Record Publication Checkpoint",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        2384,
+        80
+      ],
+      "onError": "continueErrorOutput",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "VuRl2ldGVeXPpeVF",
+          "name": "Google Sheets account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{json:$('Prepare WordPress Draft').item.json}];"
+      },
+      "id": "e4858cbe-020b-43bd-b677-6b2c7ddfa9a1",
+      "name": "Restore Publication Context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2608,
+        80
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://saadfathysaad.net/wp-json/custom/v1/post",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.wp_payload) }}",
+        "options": {
+          "redirect": {
+            "redirect": {
+              "followRedirects": false
+            }
+          },
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "responseFormat": "json"
+            }
+          },
+          "timeout": 120000
+        }
+      },
+      "id": "893bcc41-1755-4911-9809-71ee03f70cc2",
+      "name": "Create WordPress Draft",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2832,
+        80
+      ],
+      "onError": "continueErrorOutput",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "hfVvkRHegYr8IBiS",
+          "name": "Saad WordPress Custom API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const s=JSON.parse(JSON.stringify($('Prepare WordPress Draft').item.json));\nconst b=$json.body??$json;if(b.success===false)throw new Error('Custom API rejected creation');\nconst id=Number(b.data?.id??b.data?.post_id??b.post_id??b.id);\nif(!Number.isInteger(id)||id<1)throw new Error('Custom API returned no post ID; inspect the response before retrying to avoid duplicates');\ns.wp_post_id=id;return [{json:s}];"
+      },
+      "id": "e24a553e-7aeb-4581-af88-477ea781855f",
+      "name": "Read Custom Post Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3056,
+        80
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.settings.site_url+'/wp-json/wp/v2/posts/'+$json.wp_post_id+'?context=edit' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "options": {
+          "redirect": {
+            "redirect": {
+              "followRedirects": false
+            }
+          },
+          "timeout": 120000
+        }
+      },
+      "id": "49f16a56-6ad2-418b-bdb5-c01d7b3bd113",
+      "name": "Read Created Draft",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3280,
+        80
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "onError": "continueErrorOutput",
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "JYEoFNynceC4hZhp",
+          "name": "Saad WordPress Application Password"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const s=JSON.parse(JSON.stringify($('Read Custom Post Result').item.json));\nif(Number($json.id)!==s.wp_post_id||$json.status!=='draft'||!String($json.content?.raw||'').includes(s.marker))throw new Error('Created post is not the expected draft; stop without updating it');\nreturn [{json:s}];"
+      },
+      "id": "260c9a80-9a33-4066-b10e-590728df95e0",
+      "name": "Validate Created Draft",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3504,
+        80
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.settings.site_url+'/wp-json/wp/v2/posts/'+$json.wp_post_id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({status:'draft',featured_media:$json.wp_media_id,slug:$json.article.slug}) }}",
+        "options": {
+          "redirect": {
+            "redirect": {
+              "followRedirects": false
+            }
+          },
+          "timeout": 120000
+        }
+      },
+      "id": "2f0f2b74-4f8e-4e90-9407-93e85bb17c60",
+      "name": "Attach Approved Featured Image",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3728,
+        80
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "onError": "continueErrorOutput",
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "JYEoFNynceC4hZhp",
+          "name": "Saad WordPress Application Password"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const s=JSON.parse(JSON.stringify($('Validate Created Draft').item.json));\nif(Number($json.id)!==s.wp_post_id||$json.status!=='draft'||Number($json.featured_media)!==s.wp_media_id)throw new Error('WordPress did not confirm draft and approved featured image');\nlet storedSlug='';try{storedSlug=decodeURIComponent(String($json.slug||'')).normalize('NFC');}catch(e){}\ns.seo_preflight={...(s.seo_preflight||{}),stored_slug:storedSlug,stored_slug_verified:storedSlug.replace(/-/g,' ').replace(/\\s+/g,' ').includes(String(s.article.keyword).normalize('NFC').replace(/\\s+/g,' ').trim())};\nif(!s.seo_preflight.stored_slug_verified)s.review_warning_text=(s.review_warning_text||'')+'\\nتنبيه: WordPress لم يؤكد تطابق الكلمة المفتاحية في الرابط المحفوظ؛ راجع slug في المحرر.';\ns.wp_url=s.settings.site_url+'/?p='+s.wp_post_id+'&preview=true';s.rankmath_payload={objectType:'post',objectID:Number(s.wp_post_id),meta:{rank_math_title:s.article.seo_title,rank_math_description:s.article.meta_description,rank_math_focus_keyword:s.article.keyword}};\nreturn [{json:s}];"
+      },
+      "id": "61d18497-9ca6-4646-b296-99f2bae5d430",
+      "name": "Verify Draft Created",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3952,
+        80
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.settings.site_url+'/wp-json/rankmath/v1/updateMeta' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.rankmath_payload }}",
+        "options": {
+          "redirect": {
+            "redirect": {
+              "followRedirects": false
+            }
+          },
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          },
+          "timeout": 30000
+        }
+      },
+      "id": "da8d287f-28ac-4da9-8c87-31ebbb3e57af",
+      "name": "Save Rank Math Metadata",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        4176,
+        80
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "JYEoFNynceC4hZhp",
+          "name": "Saad WordPress Application Password"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const s=JSON.parse(JSON.stringify($('Verify Draft Created').item.json));\nconst status=Number($json.statusCode||0);\nconst body=$json.body;\nconst sent=status>=200&&status<300&&!$json.error&&!(body&&typeof body==='object'&&(body.error||body.code||body.success===false));\ns.rankmath={target:95,score:null,metadata_saved:sent,metadata_verified:false,save_http_status:status||null,status:'NOT_MEASURED',note:'لم تُحسب درجة Rank Math بعد داخل محرر WordPress.'};\nif(!sent)s.rankmath.note='تعذر تأكيد حفظ حقول Rank Math. HTTP '+(status||'unavailable')+'. '+String($json.error?.message||$json.error||body?.message||'').slice(0,240);\ndelete s.rankmath_payload;\nreturn [{json:s}];"
+      },
+      "id": "0404cb56-231d-4400-929f-8d675d3fc29c",
+      "name": "Keep Rank Math Save Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4400,
+        80
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.settings.site_url+'/wp-json/wp-abilities/v1/abilities/rank-math/get-post-seo-meta/run?input%5Bpost_id%5D='+encodeURIComponent($json.wp_post_id) }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "options": {
+          "redirect": {
+            "redirect": {
+              "followRedirects": false
+            }
+          },
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          },
+          "timeout": 30000
+        }
+      },
+      "id": "934af8be-4163-4e86-a767-1fc930262160",
+      "name": "Read Rank Math Stored Score",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        4624,
+        80
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "JYEoFNynceC4hZhp",
+          "name": "Saad WordPress Application Password"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const s=JSON.parse(JSON.stringify($('Keep Rank Math Save Result').item.json));\nconst status=Number($json.statusCode||0);\nconst p=$json.body;\nconst ok=status>=200&&status<300&&p&&typeof p==='object'&&Number(p.post_id)===Number(s.wp_post_id)&&!p.error;\ns.rankmath.metadata_verified=false;\ns.rankmath.target_verified=false;\nif(ok){\n const norm=v=>String(v??'').trim();\n const expected={title:s.article.seo_title,description:s.article.meta_description,focus_keyword:s.article.keyword};\n const mismatches=Object.keys(expected).filter(k=>!norm(expected[k])||norm(p[k])!==norm(expected[k]));\n s.rankmath.metadata_verified=mismatches.length===0;\n s.rankmath.metadata_mismatches=mismatches;\n const raw=p.seo_score;\n const score=(typeof raw==='number'||(typeof raw==='string'&&raw.trim()!==''))?Number(raw):NaN;\n if(Number.isFinite(score)&&score>=0&&score<=100){\n  s.rankmath.score=score;s.rankmath.status='STORED_SCORE';\n  s.rankmath.note='الدرجة المحفوظة في Rank Math: '+score+'/100؛ ليست إعادة حساب جديدة، وقد تختلف عن درجة المحرر. الهدف 95/100 غير مُتحقق بعد.';\n }else{\n  s.rankmath.score=null;s.rankmath.status='NOT_MEASURED';\n  s.rankmath.note='تمت قراءة حقول Rank Math لكن لا توجد درجة محفوظة صالحة؛ افتح محرر WordPress لقياس الدرجة الفعلية.';\n }\n if(mismatches.length)s.rankmath.note+=' حقول SEO غير مؤكدة أو غير مطابقة: '+mismatches.join(', ')+'.';\n}else{\n s.rankmath.score=null;s.rankmath.status='READ_FAILED';\n s.rankmath.note=status===403?'رفضت أداة Rank Math قراءة بيانات هذه المسودة (403). يلزم فحص صلاحيات الأداة دون تغييرها تلقائياً.':'تعذر التحقق من بيانات Rank Math للمسودة المطلوبة. HTTP '+(status||'unavailable')+'.';\n}\nif(!s.rankmath.metadata_saved)s.rankmath.note+=' طلب حفظ حقول SEO لم يُؤكد نجاحه؛ راجع نتيجة القراءة.';\n\nif(s.seo_preflight?.stored_slug_verified===false)s.rankmath.note+=' تنبيه: الرابط المحفوظ لا يتضمن الكلمة المفتاحية حرفيًا؛ راجع slug في WordPress.';\ns.rankmath_warning='Rank Math: '+s.rankmath.note;\nif(s.seo_preflight)s.rankmath_warning+='\\nفحص المحتوى (ليس درجة Rank Math): كثافة الكلمة '+s.seo_preflight.approx_keyword_density+'%، عددها '+s.seo_preflight.exact_keyword_occurrences+'، رقم بعنوان SEO '+(s.seo_preflight.seo_title_has_number?'نعم':'لا')+'، تطابق الرابط المحفوظ '+(s.seo_preflight.stored_slug_verified?'نعم':'غير مؤكد')+'.';\n\nreturn [{json:s}];"
+      },
+      "id": "77bddc67-eabb-437e-86a0-8d7b62262965",
+      "name": "Rank Math Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4848,
+        80
+      ],
+      "onError": "continueErrorOutput"
+    }
+  ],
+  "connections": {
+    "WordPress Draft Input": {
+      "main": [
+        [
+          {
+            "node": "Normalize WordPress Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize WordPress Input": {
+      "main": [
+        [
+          {
+            "node": "Find Existing WordPress Post",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find Existing WordPress Post": {
+      "main": [
+        [
+          {
+            "node": "Check Draft Idempotency",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Draft Idempotency": {
+      "main": [
+        [
+          {
+            "node": "Draft Already Exists",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Draft Already Exists": {
+      "main": [
+        [
+          {
+            "node": "Count Accepted Draft",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Approved Image",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Approved Image": {
+      "main": [
+        [
+          {
+            "node": "Upload Approved Image",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upload Approved Image": {
+      "main": [
+        [
+          {
+            "node": "Set Image Alt Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Image Alt Text": {
+      "main": [
+        [
+          {
+            "node": "Prepare WordPress Draft",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare WordPress Draft": {
+      "main": [
+        [
+          {
+            "node": "Record Publication Checkpoint",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Record Publication Checkpoint": {
+      "main": [
+        [
+          {
+            "node": "Restore Publication Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Restore Publication Context": {
+      "main": [
+        [
+          {
+            "node": "Create WordPress Draft",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create WordPress Draft": {
+      "main": [
+        [
+          {
+            "node": "Read Custom Post Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Custom Post Result": {
+      "main": [
+        [
+          {
+            "node": "Read Created Draft",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Created Draft": {
+      "main": [
+        [
+          {
+            "node": "Validate Created Draft",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Created Draft": {
+      "main": [
+        [
+          {
+            "node": "Attach Approved Featured Image",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Attach Approved Featured Image": {
+      "main": [
+        [
+          {
+            "node": "Verify Draft Created",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify Draft Created": {
+      "main": [
+        [
+          {
+            "node": "Save Rank Math Metadata",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Rank Math Metadata": {
+      "main": [
+        [
+          {
+            "node": "Keep Rank Math Save Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Keep Rank Math Save Result": {
+      "main": [
+        [
+          {
+            "node": "Read Rank Math Stored Score",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Rank Math Stored Score": {
+      "main": [
+        [
+          {
+            "node": "Rank Math Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Rank Math Result": {
+      "main": [
+        [
+          {
+            "node": "Count Accepted Draft",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "availableInMCP": true,
+    "timezone": "Africa/Cairo",
+    "saveExecutionProgress": true,
+    "callerPolicy": "workflowsFromAList",
+    "callerIds": "IMjOAASJew6ueG10",
+    "binaryMode": "separate"
+  },
+  "active": false,
+  "id": "G7WOU8sUANPK8RXg",
+  "versionId": "f8a8d583-539f-4ea0-9072-a3a9b150cca2",
+  "nodeGroups": [
+    {
+      "id": "56896265-7150-4f60-b64f-919440756164",
+      "name": "Input Contract",
+      "nodeNames": [
+        "Normalize WordPress Input"
+      ],
+      "description": "Normalizes the approved article state received from the Telegram review stage."
+    },
+    {
+      "id": "57bba317-92ac-442f-8b4c-0d5a04887fd0",
+      "name": "WordPress Publication",
+      "nodeNames": [
+        "Find Existing WordPress Post",
+        "Check Draft Idempotency",
+        "Draft Already Exists",
+        "Count Accepted Draft",
+        "Prepare Approved Image",
+        "Upload Approved Image",
+        "Set Image Alt Text",
+        "Prepare WordPress Draft",
+        "Record Publication Checkpoint",
+        "Restore Publication Context",
+        "Create WordPress Draft",
+        "Read Custom Post Result",
+        "Read Created Draft",
+        "Validate Created Draft",
+        "Attach Approved Featured Image",
+        "Verify Draft Created",
+        "Save Rank Math Metadata",
+        "Keep Rank Math Save Result",
+        "Read Rank Math Stored Score",
+        "Rank Math Result"
+      ],
+      "description": "Provides idempotent media upload, draft creation, verification, and Rank Math persistence."
+    }
+  ],
+  "tags": []
+}
