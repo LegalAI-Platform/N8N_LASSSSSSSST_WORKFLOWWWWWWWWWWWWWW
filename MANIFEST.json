@@ -73,8 +73,8 @@
       "sourceUpdatedAt": "2026-10-08T01:34:42.574Z",
       "nodes": 14,
       "dependencies": [],
-      "bytes": 125159,
-      "sha256": "dad7d202188f4a8f11d970e51ddda0a42111031b36af28a893f91dca06ba5041"
+      "bytes": 123995,
+      "sha256": "525a23945fd3791e28207b858a8cbb39df036b9e34d9a46de5c6486042638a67"
     },
     {
       "file": "n8n/LAsST_IMAGE_PIPELINE_V1.json",
